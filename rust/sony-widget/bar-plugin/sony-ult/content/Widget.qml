@@ -35,13 +35,14 @@ Item {
         Canvas {
             id: icon
             anchors.verticalCenter: parent.verticalCenter
-            width: 24
-            height: 22
+            width: 20
+            height: 18.4
             property color tint: w.tint
             onTintChanged: requestPaint()
             onPaint: {
                 const ctx = getContext("2d");
                 ctx.reset();
+                ctx.scale(width / 24, width / 24);   // drawn on a 24 x 22 grid
                 ctx.strokeStyle = tint;
                 ctx.fillStyle = tint;
                 ctx.lineWidth = 2.4;
