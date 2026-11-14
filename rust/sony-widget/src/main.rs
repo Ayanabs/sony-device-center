@@ -2,6 +2,7 @@
 //!
 //!   sony-widget [run]                     stream one JSON line per state change on stdout
 //!   sony-widget status                    print the current JSON line once
+//!   sony-widget quit                      stop the running instance
 //!   sony-widget cycle-nc                  noise cancelling -> ambient -> off -> ...
 //!   sony-widget set-nc off|nc|ambient
 //!   sony-widget set-ambient LEVEL [voice] ambient level 1..20, optional voice focus (0|1)
@@ -135,7 +136,23 @@ fn parse_command(cmd: &str, s: &Snapshot) -> Result<Command, String> {
     }
 }
 
+/// Only one instance may hold the headset. If another is already running, ask it
+/// to quit and wait for its socket to go away, so the newest instance (and the
+/// front-end reading its output) always wins instead of piling up duplicates.
+fn take_over() {
+    let Ok(mut s) = UnixStream::connect(socket_path()) else { return };
+    let _ = writeln!(s, "quit");
+    let _ = BufReader::new(s).read_line(&mut String::new());
+    for _ in 0..30 {
+        if UnixStream::connect(socket_path()).is_err() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn run() {
+    take_over();
     let (tx, rx) = mpsc::channel::<Event>();
     serve(tx.clone());
 
@@ -172,6 +189,12 @@ fn run() {
             Event::Update(Update::Error(e)) => error = e,
             Event::Update(_) => continue,
             Event::Command(cmd, reply) => {
+                if cmd == "quit" {
+                    let _ = reply.send("ok".into());
+                    thread::sleep(Duration::from_millis(100)); // let the reply flush
+                    let _ = std::fs::remove_file(socket_path());
+                    std::process::exit(0);
+                }
                 if cmd == "status" {
                     let _ = reply.send(render(&snap, &error));
                     continue;
@@ -198,7 +221,7 @@ fn run() {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
-        Some("status" | "cycle-nc" | "set-nc" | "set-ambient" | "set-eq" | "set-pause" | "set-dsee") => {
+        Some("quit" | "status" | "cycle-nc" | "set-nc" | "set-ambient" | "set-eq" | "set-pause" | "set-dsee") => {
             std::process::exit(client(&args))
         }
         Some("-h" | "--help") => {

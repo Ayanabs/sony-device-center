@@ -70,6 +70,8 @@ Item {
         stdout: SplitParser { onRead: data => svc.apply(data) }
         onExited: restart.start()
     }
+    // Stop the child when the shell unloads / reloads this plugin, so reloads never leave a stray widget behind.
+    Component.onDestruction: { restart.stop(); feed.running = false }
     Timer { id: restart; interval: 3000; onTriggered: feed.running = true }
     Process { id: action }
 }
