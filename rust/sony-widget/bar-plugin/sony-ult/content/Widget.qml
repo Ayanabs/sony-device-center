@@ -31,12 +31,44 @@ Item {
         id: row
         anchors.verticalCenter: parent.verticalCenter
         spacing: 5
-        Text {
+        // Hand-drawn headphones: a slim band and thick, filled ear cups.
+        Canvas {
+            id: icon
             anchors.verticalCenter: parent.verticalCenter
-            font.family: "JetBrainsMono Nerd Font Mono"
-            font.pixelSize: 20
-            color: w.tint
-            text: ""          // headphones
+            width: 24
+            height: 22
+            property color tint: w.tint
+            onTintChanged: requestPaint()
+            onPaint: {
+                const ctx = getContext("2d");
+                ctx.reset();
+                ctx.strokeStyle = tint;
+                ctx.fillStyle = tint;
+                ctx.lineWidth = 2.4;
+                ctx.lineCap = "round";
+                // band
+                ctx.beginPath();
+                ctx.arc(12, 12, 8.2, Math.PI, 2 * Math.PI, false);
+                ctx.stroke();
+                // cups: 6 x 11 rounded blocks under the band ends
+                function cup(x) {
+                    const y = 11, cw = 6.4, ch = 10.5, r = 2.6;
+                    ctx.beginPath();
+                    ctx.moveTo(x + r, y);
+                    ctx.lineTo(x + cw - r, y);
+                    ctx.quadraticCurveTo(x + cw, y, x + cw, y + r);
+                    ctx.lineTo(x + cw, y + ch - r);
+                    ctx.quadraticCurveTo(x + cw, y + ch, x + cw - r, y + ch);
+                    ctx.lineTo(x + r, y + ch);
+                    ctx.quadraticCurveTo(x, y + ch, x, y + ch - r);
+                    ctx.lineTo(x, y + r);
+                    ctx.quadraticCurveTo(x, y, x + r, y);
+                    ctx.closePath();
+                    ctx.fill();
+                }
+                cup(0.9);
+                cup(24 - 0.9 - 6.4);
+            }
         }
         Text {
             anchors.verticalCenter: parent.verticalCenter
