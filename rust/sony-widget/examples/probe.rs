@@ -29,5 +29,7 @@ fn main() {
     println!("multipoint   : {}", raw(&s, &[0xd6, 0xd1], 0xd7, 0xd1));
     println!("touch panel  : {}", raw(&s, &[0xd6, 0xd2], 0xd7, 0xd2));
     println!("sidetone     : {}", raw(&s, &[0xd6, 0xd3], 0xd7, 0xd3));
+    println!("auto power raw: {}", raw(&s, &[0x26, 0x05], 0x27, -1));
+    println!("device list  : {:?}", p.get_connected_devices());
     s.disconnect();
 }

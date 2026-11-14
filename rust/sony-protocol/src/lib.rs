@@ -5,6 +5,8 @@ pub mod error;
 pub mod fake;
 pub mod frame;
 pub mod protocol;
+pub mod presets;
+pub mod profile;
 pub mod protocol_v1;
 pub mod protocol_v2;
 pub mod semantic;

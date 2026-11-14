@@ -2,7 +2,7 @@
 
 mod sdp;
 
-use sony_protocol::{Result, SonyError, SonyErrorCode, Transport};
+use sony_protocol::{ProtocolGeneration, Result, SonyError, SonyErrorCode, Transport};
 use std::sync::atomic::{AtomicI32, Ordering};
 
 pub use sdp::{ProtocolKind, SERVICE_UUID_V1, SERVICE_UUID_V2};
@@ -132,6 +132,13 @@ impl Transport for RfcommTransport {
             return Err(fail(SonyErrorCode::TransportFailure, format!("Bluetooth send failed: {e}")));
         }
         Ok(n as usize)
+    }
+
+    fn generation_hint(&self) -> Option<ProtocolGeneration> {
+        self.protocol_kind().map(|k| match k {
+            ProtocolKind::V1 => ProtocolGeneration::V1,
+            ProtocolKind::V2 => ProtocolGeneration::V2,
+        })
     }
 
     fn receive(&self, buf: &mut [u8]) -> Result<usize> {
