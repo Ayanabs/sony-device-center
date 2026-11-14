@@ -2,7 +2,7 @@
   "id": "sony-ult",
   "name": "Sony headphones",
   "description": "Battery, noise control, equalizer and features for Sony WH/WF/ULT headphones (via sony-widget).",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "hosts": ["topbarGlyph"],
   "entryPoints": { "panel": "content/Panel.qml" },
   "panel": { "width": 340 }
