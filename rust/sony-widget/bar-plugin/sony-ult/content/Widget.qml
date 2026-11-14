@@ -35,8 +35,8 @@ Item {
         Canvas {
             id: icon
             anchors.verticalCenter: parent.verticalCenter
-            width: 17
-            height: 15.6
+            width: 16.15
+            height: 14.82
             property color tint: w.tint
             onTintChanged: requestPaint()
             onPaint: {
