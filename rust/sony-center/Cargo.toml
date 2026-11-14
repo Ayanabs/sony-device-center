@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 sony-protocol = { path = "../sony-protocol" }
 sony-transport = { path = "../sony-transport" }
+sony-app = { path = "../sony-app" }
 cxx = "1"
 cxx-qt = "0.10"
 cxx-qt-lib = { version = "0.10", features = ["qt_gui", "qt_qml"] }

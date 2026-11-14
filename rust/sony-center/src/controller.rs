@@ -152,8 +152,8 @@ pub mod qobject {
 pub use qobject::DeviceController;
 pub(crate) use qobject::{QList_QVariant, QMap_QString_QVariant};
 
-use crate::backend::{Backend, Emit, PairedDevice, Request, TransportFactory, Update};
-use crate::device_core::{Command, Snapshot};
+use sony_app::{Backend, Emit, PairedDevice, Request, TransportFactory, Update};
+use sony_app::{Command, Snapshot};
 use crate::i18n;
 use core::pin::Pin;
 use cxx_qt::{CxxQtType, Threading};

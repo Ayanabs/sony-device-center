@@ -439,6 +439,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "sony-app"
+version = "0.1.0"
+dependencies = [
+ "sony-protocol",
+ "sony-transport",
+]
+
+[[package]]
 name = "sony-center"
 version = "0.1.0"
 dependencies = [
@@ -446,6 +454,7 @@ dependencies = [
  "cxx-qt",
  "cxx-qt-build",
  "cxx-qt-lib",
+ "sony-app",
  "sony-protocol",
  "sony-transport",
 ]
@@ -469,6 +478,8 @@ dependencies = [
 name = "sony-widget"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
+ "sony-app",
  "sony-protocol",
  "sony-transport",
 ]

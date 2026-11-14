@@ -7,3 +7,5 @@ license.workspace = true
 [dependencies]
 sony-protocol = { path = "../sony-protocol" }
 sony-transport = { path = "../sony-transport" }
+sony-app = { path = "../sony-app" }
+serde_json = "1"

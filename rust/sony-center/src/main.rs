@@ -1,6 +1,4 @@
-mod backend;
 mod controller;
-mod device_core;
 mod i18n;
 
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QString, QUrl};

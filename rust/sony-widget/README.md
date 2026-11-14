@@ -52,6 +52,10 @@ The glyphs are Nerd Font icons (󰋋 󰋎 󰟎); use a Nerd Font in the bar.
 | `sony-widget cycle-nc` | noise cancelling → ambient → off → … |
 | `sony-widget set-nc off\|nc\|ambient` | set a mode directly |
 | `sony-widget status` | print the current JSON line |
+| `sony-widget set-ambient LEVEL [on\|off]` | ambient level 1-20, optional voice focus |
+| `sony-widget set-eq PRESET` | EQ preset id (`0x16`) or name (`bass-boost`) |
+| `sony-widget set-pause on\|off` | pause on removal (if supported) |
+| `sony-widget set-dsee on\|off` | DSEE (if supported) |
 
 ## Ryoku `qsbar` plugin (headphone icon in the bar)
 
@@ -66,4 +70,6 @@ RYOSTORE_PLUGINS_DIR=~/.local/share/ryoku-dev-plugins ryoku-plugins-place sony-u
 RYOSTORE_PLUGINS_DIR=~/.local/share/ryoku-dev-plugins ryoku-plugins-place sony-ult enabled true
 ```
 
-Left-click cycles noise cancelling / ambient / off; right-click turns it off.
+Left-click opens a panel (noise control with ambient level and voice focus, equalizer
+presets, pause on removal, DSEE, connected devices); right-click cycles noise control.
+Move it next to the music widget with `ryoku-shell bar move sony-ult --section right --index 1`.

@@ -1,65 +1,35 @@
-//! Waybar module for Sony headphones.
+//! Headphone widget daemon for bars (Waybar / Quickshell).
 //!
-//!   sony-widget [run] [--addr AA:BB:..]   stream Waybar JSON lines on stdout
-//!   sony-widget cycle-nc                  NC -> Ambient -> Off -> NC (running instance)
-//!   sony-widget set-nc off|nc|ambient     set noise control (running instance)
+//!   sony-widget [run]                     stream one JSON line per state change on stdout
 //!   sony-widget status                    print the current JSON line once
+//!   sony-widget cycle-nc                  noise cancelling -> ambient -> off -> ...
+//!   sony-widget set-nc off|nc|ambient
+//!   sony-widget set-ambient LEVEL [voice] ambient level 1..20, optional voice focus (0|1)
+//!   sony-widget set-eq PRESET             preset id (0x16) or name (bass-boost)
+//!   sony-widget set-pause on|off          pause when removed (if supported)
+//!   sony-widget set-dsee on|off           DSEE (if supported)
 
 mod render;
 
-use render::{render, View};
-use sony_protocol::{
-    apply_notification, Changed, DeviceState, NoiseControlMode, Protocol, ProtocolV1, ProtocolV2,
-    Session,
-};
-use sony_transport::{ProtocolKind, RfcommTransport};
+use render::render;
+use sony_app::{Backend, Command, Emit, Request, Snapshot, TransportFactory, Update};
+use sony_protocol::presets::PRESETS;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
-use std::process::Command;
-use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
-
-const REFRESH_EVERY: Duration = Duration::from_secs(300);
-const RETRY_EVERY: Duration = Duration::from_secs(5);
+use std::time::Duration;
 
 enum Event {
-    Notification(Vec<u8>),
+    Update(Update),
     Command(String, Sender<String>),
 }
 
 fn socket_path() -> PathBuf {
     let dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|| "/tmp".into());
     dir.join("sony-widget.sock")
-}
-
-fn emit(view: &View) {
-    println!("{}", render(view));
-    let _ = std::io::stdout().flush();
-}
-
-/// First connected Bluetooth device that exposes a Sony service.
-fn find_device() -> Option<String> {
-    let out = Command::new("bluetoothctl").args(["devices", "Connected"]).output().ok()?;
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter_map(|l| l.split_whitespace().nth(1).map(str::to_owned))
-        .find(|a| sony_transport::probe(a).is_some())
-}
-
-fn device_name(addr: &str) -> String {
-    Command::new("bluetoothctl")
-        .args(["info", addr])
-        .output()
-        .ok()
-        .and_then(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .find_map(|l| l.trim().strip_prefix("Name: ").map(str::to_owned))
-        })
-        .unwrap_or_else(|| "Sony headphones".into())
 }
 
 fn client(args: &[String]) -> i32 {
@@ -92,7 +62,9 @@ fn serve(tx: Sender<Event>) {
                 if BufReader::new(&conn).read_line(&mut line).is_ok() {
                     let (rtx, rrx) = mpsc::channel();
                     if tx.send(Event::Command(line.trim().to_owned(), rtx)).is_ok() {
-                        let reply = rrx.recv_timeout(Duration::from_secs(5)).unwrap_or_else(|_| "error: timeout".into());
+                        let reply = rrx
+                            .recv_timeout(Duration::from_secs(5))
+                            .unwrap_or_else(|_| "error: timeout".into());
                         let _ = writeln!(&conn, "{reply}");
                     }
                 }
@@ -101,144 +73,182 @@ fn serve(tx: Sender<Event>) {
     });
 }
 
-fn next_nc(m: NoiseControlMode) -> NoiseControlMode {
-    match m {
-        NoiseControlMode::NoiseCancelling => NoiseControlMode::Ambient,
-        NoiseControlMode::Ambient => NoiseControlMode::Off,
-        NoiseControlMode::Off => NoiseControlMode::NoiseCancelling,
+fn on_off(s: &str) -> Option<bool> {
+    match s {
+        "on" | "1" | "true" => Some(true),
+        "off" | "0" | "false" => Some(false),
+        _ => None,
     }
 }
 
-fn refresh(proto: &dyn Protocol, st: &mut DeviceState) {
-    if let Ok(b) = proto.get_battery() {
-        st.battery = b;
+fn parse_preset(s: &str) -> Option<i32> {
+    let l = s.to_lowercase();
+    if let Some(hex) = l.strip_prefix("0x") {
+        return i32::from_str_radix(hex, 16).ok();
     }
-    if let Ok(n) = proto.get_noise_control() {
-        st.noise_control = n;
+    if let Ok(n) = l.parse::<i32>() {
+        return Some(n);
     }
+    PRESETS.iter().find(|(_, id, name)| *id == l || name.to_lowercase() == l).map(|(n, _, _)| *n)
 }
 
-fn handle_command(cmd: &str, proto: &dyn Protocol, st: &mut DeviceState, name: &str) -> String {
+/// Turns a socket command into a backend command (or a ready reply).
+fn parse_command(cmd: &str, s: &Snapshot) -> Result<Command, String> {
     let parts: Vec<&str> = cmd.split_whitespace().collect();
-    let mode = match parts.as_slice() {
-        ["status"] => return render(&View::connected(name, st)),
-        ["cycle-nc"] => next_nc(st.noise_control.mode),
-        ["set-nc", "off"] => NoiseControlMode::Off,
-        ["set-nc", "nc"] => NoiseControlMode::NoiseCancelling,
-        ["set-nc", "ambient"] => NoiseControlMode::Ambient,
-        _ => return "error: unknown command".into(),
-    };
-    let mut want = st.noise_control.clone();
-    want.mode = mode;
-    if mode == NoiseControlMode::Ambient && want.ambient_level == 0 {
-        want.ambient_level = 10;
-    }
-    match proto.set_noise_control(&want) {
-        Ok(()) => {
-            if let Ok(n) = proto.get_noise_control() {
-                st.noise_control = n;
-            } else {
-                st.noise_control = want;
-            }
-            "ok".into()
+    let c = &s.caps;
+    let need = |ok: bool, what: &str| if ok { Ok(()) } else { Err(format!("error: {what} not supported by this headset")) };
+    match parts.as_slice() {
+        ["cycle-nc"] => {
+            need(c.anc, "noise control")?;
+            Ok(match s.noise_mode.as_str() {
+                "cancelling" => Command::Ambient { level: s.ambient_level, focus_on_voice: s.focus_on_voice },
+                "ambient" => Command::Anc(false),
+                _ => Command::Anc(true),
+            })
         }
-        Err(e) => format!("error: {}", e.message),
+        ["set-nc", "off"] => Ok(Command::Anc(false)),
+        ["set-nc", "nc"] => Ok(Command::Anc(true)),
+        ["set-nc", "ambient"] => {
+            Ok(Command::Ambient { level: s.ambient_level, focus_on_voice: s.focus_on_voice })
+        }
+        ["set-ambient", level, rest @ ..] => {
+            let level: i32 = level.parse().map_err(|_| "error: bad level".to_string())?;
+            if !(1..=20).contains(&level) {
+                return Err("error: level must be 1..20".into());
+            }
+            let voice = rest.first().and_then(|v| on_off(v)).unwrap_or(s.focus_on_voice);
+            Ok(Command::Ambient { level, focus_on_voice: voice })
+        }
+        ["set-eq", p] => {
+            need(c.equalizer, "equalizer")?;
+            parse_preset(p).map(Command::EqPreset).ok_or_else(|| "error: unknown preset".into())
+        }
+        ["set-pause", v] => {
+            need(c.pause_when_removed, "pause on removal")?;
+            on_off(v).map(Command::PauseWhenRemoved).ok_or_else(|| "error: expected on|off".into())
+        }
+        ["set-dsee", v] => {
+            need(c.dsee, "DSEE")?;
+            on_off(v).map(Command::Dsee).ok_or_else(|| "error: expected on|off".into())
+        }
+        _ => Err("error: unknown command".into()),
     }
 }
 
-/// Waits out the retry delay while still answering commands.
-fn idle(rx: &mpsc::Receiver<Event>) {
-    let deadline = Instant::now() + RETRY_EVERY;
-    while let Some(left) = deadline.checked_duration_since(Instant::now()) {
-        match rx.recv_timeout(left) {
-            Ok(Event::Command(_, r)) => {
-                let _ = r.send("error: headset not connected".into());
-            }
-            Ok(Event::Notification(_)) => {}
-            Err(_) => break,
-        }
-    }
-}
-
-fn run(addr_arg: Option<String>) {
+fn run() {
     let (tx, rx) = mpsc::channel::<Event>();
     serve(tx.clone());
-    emit(&View::disconnected());
 
-    loop {
-        let Some(addr) = addr_arg.clone().or_else(find_device) else {
-            idle(&rx);
-            continue;
-        };
-        let transport = Arc::new(RfcommTransport::new());
-        let session = Arc::new(Session::new(transport.clone()));
-        if session.connect(&addr).is_err() {
-            idle(&rx);
-            continue;
+    let utx = tx.clone();
+    let emit: Emit = Arc::new(move |u| {
+        let _ = utx.send(Event::Update(u));
+    });
+    let factory: TransportFactory = Arc::new(|| {
+        Arc::new(sony_transport::RfcommTransport::new()) as Arc<dyn sony_protocol::Transport>
+    });
+    let backend = Backend::start(factory, emit, true);
+
+    let mut snap = Snapshot::disconnected("searching");
+    let mut error = String::new();
+    let mut last = String::new();
+    let mut emit_line = |snap: &Snapshot, error: &str, last: &mut String| {
+        let line = render(snap, error);
+        if line != *last {
+            println!("{line}");
+            let _ = std::io::stdout().flush();
+            *last = line;
         }
-        let ntx = tx.clone();
-        session.on_notification(Arc::new(move |f| {
-            let _ = ntx.send(Event::Notification(f.payload.clone()));
-        }));
-        let proto: Box<dyn Protocol> = match transport.protocol_kind() {
-            Some(ProtocolKind::V1) => Box::new(ProtocolV1::new(session.clone())),
-            _ => Box::new(ProtocolV2::new(session.clone(), false, false)),
-        };
-        let name = device_name(&addr);
-        let _ = proto.init_device();
-        let mut st = DeviceState::default();
-        refresh(proto.as_ref(), &mut st);
-        emit(&View::connected(&name, &st));
+    };
+    emit_line(&snap, &error, &mut last);
 
-        let mut last_refresh = Instant::now();
-        while session.is_connected() {
-            match rx.recv_timeout(Duration::from_secs(2)) {
-                Ok(Event::Notification(p)) => {
-                    let changed = match apply_notification(&p, &mut st, false) {
-                        Some(c) => Some(c),
-                        // V1 and other layouts: re-read instead of guessing the layout.
-                        None if matches!(p.first(), Some(0x67 | 0x69)) => {
-                            if let Ok(n) = proto.get_noise_control() {
-                                st.noise_control = n;
-                            }
-                            Some(Changed::NoiseControl)
+    while let Ok(ev) = rx.recv() {
+        match ev {
+            Event::Update(Update::Snapshot(s)) => {
+                snap = s;
+                if !snap.connected || snap.connection_state != "connected" {
+                    error.clear();
+                }
+            }
+            Event::Update(Update::Error(e)) => error = e,
+            Event::Update(_) => continue,
+            Event::Command(cmd, reply) => {
+                if cmd == "status" {
+                    let _ = reply.send(render(&snap, &error));
+                    continue;
+                }
+                let r = if !snap.connected {
+                    "error: headset not connected".to_string()
+                } else {
+                    match parse_command(&cmd, &snap) {
+                        Ok(c) => {
+                            error.clear();
+                            backend.request(Request::Command(c));
+                            "ok".into()
                         }
-                        None => None,
-                    };
-                    if changed.is_some() {
-                        emit(&View::connected(&name, &st));
+                        Err(e) => e,
                     }
-                }
-                Ok(Event::Command(cmd, reply)) => {
-                    let r = handle_command(&cmd, proto.as_ref(), &mut st, &name);
-                    let _ = reply.send(r);
-                    emit(&View::connected(&name, &st));
-                }
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => return,
-            }
-            if last_refresh.elapsed() >= REFRESH_EVERY {
-                refresh(proto.as_ref(), &mut st);
-                emit(&View::connected(&name, &st));
-                last_refresh = Instant::now();
+                };
+                let _ = reply.send(r);
             }
         }
-        session.disconnect();
-        emit(&View::disconnected());
-        idle(&rx);
+        emit_line(&snap, &error, &mut last);
     }
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
-        Some("cycle-nc" | "set-nc" | "status") => std::process::exit(client(&args)),
+        Some("status" | "cycle-nc" | "set-nc" | "set-ambient" | "set-eq" | "set-pause" | "set-dsee") => {
+            std::process::exit(client(&args))
+        }
         Some("-h" | "--help") => {
-            println!("usage: sony-widget [run] [--addr MAC] | cycle-nc | set-nc off|nc|ambient | status");
+            println!("usage: sony-widget [run] | status | cycle-nc | set-nc off|nc|ambient | set-ambient LEVEL [on|off] | set-eq PRESET | set-pause on|off | set-dsee on|off");
         }
-        _ => {
-            let addr = args.iter().position(|a| a == "--addr").and_then(|i| args.get(i + 1)).cloned();
-            run(addr);
-        }
+        _ => run(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snap() -> Snapshot {
+        let mut s = Snapshot::disconnected("connected");
+        s.connected = true;
+        s.caps.anc = true;
+        s.caps.equalizer = true;
+        s.caps.pause_when_removed = true;
+        s.noise_mode = "cancelling".into();
+        s.ambient_level = 7;
+        s
+    }
+
+    #[test]
+    fn cycle_walks_nc_ambient_off() {
+        let mut s = snap();
+        assert_eq!(parse_command("cycle-nc", &s), Ok(Command::Ambient { level: 7, focus_on_voice: false }));
+        s.noise_mode = "ambient".into();
+        assert_eq!(parse_command("cycle-nc", &s), Ok(Command::Anc(false)));
+        s.noise_mode = "off".into();
+        assert_eq!(parse_command("cycle-nc", &s), Ok(Command::Anc(true)));
+    }
+
+    #[test]
+    fn presets_parse_by_id_name_and_number() {
+        let s = snap();
+        assert_eq!(parse_command("set-eq bass-boost", &s), Ok(Command::EqPreset(0x16)));
+        assert_eq!(parse_command("set-eq 0x11", &s), Ok(Command::EqPreset(0x11)));
+        assert_eq!(parse_command("set-eq 22", &s), Ok(Command::EqPreset(22)));
+        assert!(parse_command("set-eq nonsense", &s).is_err());
+    }
+
+    #[test]
+    fn unsupported_features_and_bad_input_are_rejected() {
+        let s = snap();
+        assert!(parse_command("set-dsee on", &s).unwrap_err().contains("not supported"));
+        assert!(parse_command("set-ambient 99", &s).is_err());
+        assert_eq!(parse_command("set-pause on", &s), Ok(Command::PauseWhenRemoved(true)));
+        assert!(parse_command("set-pause maybe", &s).is_err());
+        assert!(parse_command("rm -rf", &s).is_err());
     }
 }

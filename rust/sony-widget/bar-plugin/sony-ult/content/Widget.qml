@@ -1,8 +1,8 @@
 import QtQuick
 
 // Bar glyph: headphones icon + battery %, tinted by noise-control mode.
-//   left click  -> cycle noise cancelling / ambient / off
-//   right click -> noise control off
+//   left click  -> open the panel (noise control, EQ, features, devices)
+//   right click -> cycle noise cancelling / ambient / off
 Item {
     id: w
     property var pluginApi: null
@@ -51,8 +51,8 @@ Item {
         cursorShape: Qt.PointingHandCursor
         onClicked: mouse => {
             if (!w.svc) return;
-            if (mouse.button === Qt.RightButton) w.svc.noiseControlOff();
-            else w.svc.cycleNoiseControl();
+            if (mouse.button === Qt.RightButton) w.svc.cycleNoiseControl();
+            else if (w.pluginApi) w.pluginApi.togglePanel();
         }
     }
 }
