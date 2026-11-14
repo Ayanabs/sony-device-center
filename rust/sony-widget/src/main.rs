@@ -151,8 +151,35 @@ fn take_over() {
     }
 }
 
+/// Last resort for an orphan that lost its socket (e.g. its front-end was killed and
+/// a newer instance unlinked the path): ask the OS to stop every other sony-widget.
+fn kill_others() {
+    let me = std::process::id();
+    let others: Vec<u32> = std::fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|&pid| pid != me)
+        .filter(|pid| {
+            std::fs::read_to_string(format!("/proc/{pid}/comm")).is_ok_and(|c| c.trim() == "sony-widget")
+        })
+        .collect();
+    for pid in &others {
+        // SAFETY: plain signal to another process of the same user.
+        unsafe { libc::kill(*pid as libc::pid_t, libc::SIGTERM) };
+    }
+    for _ in 0..30 {
+        if others.iter().all(|pid| !std::path::Path::new(&format!("/proc/{pid}")).exists()) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn run() {
     take_over();
+    kill_others();
     let (tx, rx) = mpsc::channel::<Event>();
     serve(tx.clone());
 
@@ -168,7 +195,7 @@ fn run() {
     let mut snap = Snapshot::disconnected("searching");
     let mut error = String::new();
     let mut last = String::new();
-    let mut emit_line = |snap: &Snapshot, error: &str, last: &mut String| {
+    let emit_line = |snap: &Snapshot, error: &str, last: &mut String| {
         let line = render(snap, error);
         if line != *last {
             println!("{line}");

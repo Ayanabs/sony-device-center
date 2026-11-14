@@ -19,10 +19,11 @@ Item {
     visible: implicitWidth > 0
 
     // Icon colour follows the battery: white at 60% and above, yellow from 59% down
-    // to 31%, red at 30% and below. Grey when the level is unknown.
+    // to 31%, red from 30% to 10%, bright red below 10%. Grey when the level is unknown.
     readonly property color tint: !up || svc.battery < 0 ? "#808080"
         : svc.battery >= 60 ? "#ffffff"
-        : svc.battery > 30 ? "#f9e2af" : "#f38ba8"
+        : svc.battery > 30 ? "#f9e2af"
+        : svc.battery >= 10 ? "#e5484d" : "#ff1f1f"
     // The percentage stays neutral, and turns green while charging.
     readonly property color battTint: !up ? "#808080" : svc.charging ? "#a6e3a1" : "#d0d0d0"
 
@@ -33,7 +34,7 @@ Item {
         Text {
             anchors.verticalCenter: parent.verticalCenter
             font.family: "JetBrainsMono Nerd Font Mono"
-            font.pixelSize: 15
+            font.pixelSize: 20
             color: w.tint
             text: ""          // headphones
         }
