@@ -166,7 +166,12 @@ fn ensure_daemon() {
                 Ok(())
             });
         }
-        let _ = cmd.spawn();
+        if let Ok(mut child) = cmd.spawn() {
+            // Reap it when it exits (a second daemon quits at once if one already runs).
+            thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
     }
     for _ in 0..50 {
         if UnixStream::connect(socket_path()).is_ok() {
@@ -179,6 +184,14 @@ fn ensure_daemon() {
 /// Front-end mode: print the daemon's lines until stdout closes. Reattaches (and
 /// restarts the daemon) if the daemon goes away.
 fn watch() {
+    // Die with whoever started us (the shell), so reloads never leave watchers behind.
+    // SAFETY: plain prctl/getppid calls.
+    unsafe {
+        libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+        if libc::getppid() == 1 {
+            return; // already orphaned
+        }
+    }
     let mut out = std::io::stdout();
     loop {
         ensure_daemon();
