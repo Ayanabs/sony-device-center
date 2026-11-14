@@ -52,3 +52,18 @@ The glyphs are Nerd Font icons (󰋋 󰋎 󰟎); use a Nerd Font in the bar.
 | `sony-widget cycle-nc` | noise cancelling → ambient → off → … |
 | `sony-widget set-nc off\|nc\|ambient` | set a mode directly |
 | `sony-widget status` | print the current JSON line |
+
+## Ryoku `qsbar` plugin (headphone icon in the bar)
+
+`bar-plugin/sony-ult` is a `topbarGlyph` plugin. It runs `sony-widget` itself, so do
+not also run the Waybar module or the corner pill (the headset allows one connection).
+
+```sh
+mkdir -p ~/.local/share/ryoku-dev-plugins && cp -r bar-plugin/sony-ult ~/.local/share/ryoku-dev-plugins/
+# the shell must see the folder: put this in ~/.config/hypr/user.lua, then log in again
+#   hl.env("RYOSTORE_PLUGINS_DIR", os.getenv("HOME") .. "/.local/share/ryoku-dev-plugins")
+RYOSTORE_PLUGINS_DIR=~/.local/share/ryoku-dev-plugins ryoku-plugins-place sony-ult host topbarGlyph
+RYOSTORE_PLUGINS_DIR=~/.local/share/ryoku-dev-plugins ryoku-plugins-place sony-ult enabled true
+```
+
+Left-click cycles noise cancelling / ambient / off; right-click turns it off.

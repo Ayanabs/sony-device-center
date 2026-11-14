@@ -1,0 +1,7 @@
+{
+  "id": "sony-ult",
+  "name": "Sony headphones",
+  "description": "Battery and noise-control mode for Sony WH/WF/ULT headphones (via sony-widget).",
+  "version": "0.1.0",
+  "hosts": ["topbarGlyph"]
+}
