@@ -72,4 +72,4 @@ RYOSTORE_PLUGINS_DIR=~/.local/share/ryoku-dev-plugins ryoku-plugins-place sony-u
 
 Left-click opens a panel (noise control with ambient level and voice focus, equalizer
 presets, pause on removal, DSEE, connected devices); right-click cycles noise control.
-Move it next to the music widget with `ryoku-shell bar move sony-ult --section right --index 1`.
+Place it left of the music widget with `ryoku-shell bar move sony-ult --section right --index 0` (index 1 puts it right of it).
