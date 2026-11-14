@@ -7,3 +7,4 @@ license.workspace = true
 [dependencies]
 sony-protocol = { path = "../sony-protocol" }
 sony-transport = { path = "../sony-transport" }
+libc = "0.2"

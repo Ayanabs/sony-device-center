@@ -2,6 +2,7 @@
 //! device connection, state snapshot, commands and the worker thread.
 
 pub mod backend;
+pub mod bluez_watch;
 pub mod device_core;
 
 pub use backend::{Backend, Emit, PairedDevice, Request, TransportFactory, Update};
