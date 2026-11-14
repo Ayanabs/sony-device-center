@@ -13,7 +13,7 @@ public:
     // as the WH-1000XM6, instead of the legacy 5-band + Clear Bass format
     // (inquired type 0x00) shared with ProtocolV1. See DeviceProfile.h and
     // issue #10.
-    explicit ProtocolV2(SonyProtocolSession& session, bool tenBandEqualizer = false);
+    explicit ProtocolV2(SonyProtocolSession& session, bool tenBandEqualizer = false, bool ultBass = false);
     ~ProtocolV2() override = default;
 
     [[nodiscard]] ProtocolGeneration generation() const noexcept override {
@@ -46,11 +46,15 @@ public:
 
     bool getAdaptiveVolume() override;
     void setAdaptiveVolume(bool enabled) override;
+    bool getPauseWhenRemoved() override;
+    void setPauseWhenRemoved(bool enabled) override;
+    std::vector<ConnectedDevice> getConnectedDevices() override;
 
 private:
     SonyProtocolSession& _session;
     std::mutex _mutex;
     bool _tenBandEqualizer;
+    bool _ultBass;
 };
 
 } // namespace sony::protocol

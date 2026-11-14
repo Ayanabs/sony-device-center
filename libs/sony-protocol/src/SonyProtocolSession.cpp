@@ -39,7 +39,6 @@ void SonyProtocolSession::start() {
         std::lock_guard lock(_sessionMtx);
         _streamBuffer.clear();
         _lastSeenDataSeq.reset();
-        _unmatchedFrames.clear();
         _hasAck = false;
         _pendingRequest.reset();
     }
@@ -55,7 +54,6 @@ void SonyProtocolSession::disconnect() noexcept {
         std::lock_guard lock(_sessionMtx);
         _streamBuffer.clear();
         _lastSeenDataSeq.reset();
-        _unmatchedFrames.clear();
         _pendingRequest.reset();
         _hasAck = false;
         _sequence.store(0);
@@ -207,10 +205,10 @@ void SonyProtocolSession::_handleDecodedFrame(const SonyFrame& frame) {
         return;
     }
 
-    if (frame.type == DataType::DataMdr) {
+    if (frame.type == DataType::DataMdr || frame.type == DataType::DataMdrNo2) {
         std::string desc = Logger::describePayload(frame.payload);
         if (!desc.empty()) {
-            Logger::debug(LogCategory::Protocol, desc);
+            Logger::debug(LogCategory::Protocol, desc + " payload=" + Logger::formatHex(frame.payload));
         }
 
         // Send ACK back to device with toggled 1-bit sequence
@@ -238,7 +236,7 @@ void SonyProtocolSession::_handleDecodedFrame(const SonyFrame& frame) {
         bool matchedRequest = false;
         {
             std::lock_guard lock(_sessionMtx);
-            if (_pendingRequest && !_pendingRequest->hasResponse) {
+            if (_pendingRequest && !_pendingRequest->hasResponse && frame.type == _pendingRequest->expectedType) {
                 if (!frame.payload.empty() && frame.payload[0] == _pendingRequest->expectedOpcode) {
                     if (_pendingRequest->expectedSubtype < 0 ||
                         (frame.payload.size() >= 2 && frame.payload[1] == static_cast<uint8_t>(_pendingRequest->expectedSubtype)))
@@ -248,12 +246,6 @@ void SonyProtocolSession::_handleDecodedFrame(const SonyFrame& frame) {
                         matchedRequest = true;
                         _responseCv.notify_all();
                     }
-                }
-            }
-            if (!matchedRequest) {
-                _unmatchedFrames.push_back(frame);
-                if (_unmatchedFrames.size() > 32) {
-                    _unmatchedFrames.pop_front();
                 }
             }
         }
@@ -323,7 +315,7 @@ void SonyProtocolSession::send(const SonyFrame& frame, std::chrono::milliseconds
     std::unique_lock sendLock(_sendMtx);
 
     SonyFrame toSend = frame;
-    if (toSend.type == DataType::DataMdr) {
+    if (toSend.type == DataType::DataMdr || toSend.type == DataType::DataMdrNo2) {
         toSend.sequence = nextSequenceNumber();
     }
 
@@ -363,7 +355,7 @@ SonyFrame SonyProtocolSession::sendAndAwaitResponse(
     std::unique_lock sendLock(_sendMtx);
 
     SonyFrame toSend = request;
-    if (toSend.type == DataType::DataMdr) {
+    if (toSend.type == DataType::DataMdr || toSend.type == DataType::DataMdrNo2) {
         toSend.sequence = nextSequenceNumber();
     }
 
@@ -372,6 +364,7 @@ SonyFrame SonyProtocolSession::sendAndAwaitResponse(
         _expectedAckSeq = toSend.sequence;
         _hasAck = false;
         _pendingRequest = PendingRequest{
+            .expectedType = toSend.type,
             .expectedOpcode = retOpcode,
             .expectedSubtype = retSubtype,
             .hasResponse = false,
@@ -380,17 +373,9 @@ SonyFrame SonyProtocolSession::sendAndAwaitResponse(
             .expectedAckSeq = toSend.sequence
         };
 
-        // Check if matching response was already buffered in _unmatchedFrames
-        for (auto it = _unmatchedFrames.begin(); it != _unmatchedFrames.end(); ++it) {
-            if (!it->payload.empty() && it->payload[0] == retOpcode) {
-                if (retSubtype < 0 || (it->payload.size() >= 2 && it->payload[1] == static_cast<uint8_t>(retSubtype))) {
-                    _pendingRequest->response = *it;
-                    _pendingRequest->hasResponse = true;
-                    _unmatchedFrames.erase(it);
-                    break;
-                }
-            }
-        }
+        // Frames received before this request belong to an earlier inquiry or
+        // notification. Reusing them can replace a newly selected EQ's display
+        // with an old Off or Manual reading.
     }
 
     _writeFrame(toSend);

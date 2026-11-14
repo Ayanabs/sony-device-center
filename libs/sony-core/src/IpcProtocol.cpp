@@ -260,6 +260,10 @@ IpcResponse IpcProtocol::execute(const IpcCommand& cmd, IDeviceService& service)
         case IpcCommandType::EqGet: {
             std::ostringstream oss;
             oss << "Preset: " << presetToString(snap->equalizer.preset) << "\n";
+            if (dev->capabilities().ultBass) {
+                const int mode = snap->equalizer.ultMode;
+                oss << "ULT: " << (mode < 0 ? "Unknown" : mode == 0 ? "Off" : std::to_string(mode)) << "\n";
+            }
             if (!dev->capabilities().tenBandEqualizer) {
                 oss << "Clear Bass: " << snap->equalizer.clearBass << "\n";
             }

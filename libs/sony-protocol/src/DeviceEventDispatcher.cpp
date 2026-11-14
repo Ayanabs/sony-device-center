@@ -1,4 +1,5 @@
 #include "sony/protocol/DeviceEventDispatcher.h"
+#include "sony/protocol/EqualizerCodec.h"
 #include <algorithm>
 
 namespace sony::protocol {
@@ -130,7 +131,7 @@ bool DeviceEventDispatcher::parseNotification(const SonyFrame& frame, DeviceStat
     return parseNotificationPayload(frame.payload, inOutState);
 }
 
-bool DeviceEventDispatcher::parseNotificationPayload(const std::vector<uint8_t>& payload, DeviceState& inOutState, bool notify) {
+bool DeviceEventDispatcher::parseNotificationPayload(const std::vector<uint8_t>& payload, DeviceState& inOutState, bool notify, bool ultBass) {
     if (payload.empty()) {
         return false;
     }
@@ -188,28 +189,13 @@ bool DeviceEventDispatcher::parseNotificationPayload(const std::vector<uint8_t>&
     // legacy shape here previously misparsed 10-band notifications (reading
     // a raw band value as "clearBass = value - 10", etc).
     if (opcode == 0x57 || opcode == 0x59) {
-        if (payload.size() >= 4) {
-            inOutState.equalizer.preset = static_cast<int>(payload[2]);
-            const size_t count = payload[3];
-            if (payload.size() >= 4 + count) {
-                if (payload[1] == 0x04) {
-                    inOutState.equalizer.clearBass = 0;
-                    inOutState.equalizer.bands.assign(count, 0);
-                    for (size_t i = 0; i < count; ++i) {
-                        inOutState.equalizer.bands[i] = static_cast<int>(payload[4 + i]);
-                    }
-                } else if (count >= 1) {
-                    inOutState.equalizer.clearBass = static_cast<int>(payload[4]) - 10;
-                    inOutState.equalizer.bands.assign(count - 1, 0);
-                    for (size_t i = 0; i + 1 < count; ++i) {
-                        inOutState.equalizer.bands[i] = static_cast<int>(payload[5 + i]) - 10;
-                    }
-                }
-            }
+        try {
+            const auto eq = decodeEqualizer(payload, ultBass);
+            inOutState.equalizer = eq;
             if (notify) dispatch(EqualizerChanged{inOutState.equalizer});
             if (notify) dispatch(DeviceStateChanged{std::make_shared<const DeviceState>(inOutState)});
             return true;
-        }
+        } catch (const SonyException&) { return false; }
     }
 
     return false;

@@ -159,6 +159,10 @@ TEST_CASE("Equalizer preset names round-trip", "[protocol][eq]") {
 }
 
 TEST_CASE("Equalizer preset lookup is case-insensitive and accepts aliases", "[protocol][eq]") {
+    // The GUI's Custom chip and the device's MANUAL code are the same EQ mode.
+    CHECK(equalizerPresetName(0xa0) == "Custom");
+    CHECK(equalizerPresetFromName("Custom") == 0xa0);
+    CHECK(equalizerPresetFromName("Manual") == 0xa0);
     CHECK(equalizerPresetFromName("BASS-BOOST") == 0x16);
     CHECK(equalizerPresetFromName("bass") == 0x16);
     CHECK(equalizerPresetFromName("treble") == 0x15);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "SemanticTypes.h"
+#include "sony/transport/SonyError.h"
 #include <string>
 #include <vector>
 
@@ -44,6 +45,16 @@ public:
 
     virtual bool getAdaptiveVolume() = 0;
     virtual void setAdaptiveVolume(bool enabled) = 0;
+
+    virtual bool getPauseWhenRemoved() {
+        throw SonyException(SonyErrorCode::Unsupported, "Pause on removal is not supported by this protocol");
+    }
+    virtual std::vector<ConnectedDevice> getConnectedDevices() {
+        throw SonyException(SonyErrorCode::Unsupported, "Headset device list is not supported by this protocol");
+    }
+    virtual void setPauseWhenRemoved(bool) {
+        throw SonyException(SonyErrorCode::Unsupported, "Pause on removal is not supported by this protocol");
+    }
 };
 
 } // namespace sony::protocol

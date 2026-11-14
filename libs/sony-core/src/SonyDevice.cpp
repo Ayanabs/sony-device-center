@@ -2,7 +2,9 @@
 #include "sony/protocol/DeviceProfileRegistry.h"
 #include "sony/protocol/ProtocolV1.h"
 #include "sony/protocol/ProtocolV2.h"
+#include "sony/protocol/PeripheralCodec.h"
 #include "sony/transport/Logger.h"
+#include <thread>
 
 namespace sony::core {
 
@@ -56,7 +58,9 @@ void SonyDevice::connect(const transport::DeviceAddress& address, std::string_vi
         for (const auto& [name, supported] : std::initializer_list<std::pair<std::string, bool>>{
             {"battery",c.battery},{"noiseControl",c.noiseCancelling || c.ambientSound},
             {"equalizer",c.equalizer},{"dsee",c.dsee},{"codec",c.codecInfo},{"firmware",c.firmwareInfo},
-            {"speakToChat",c.speakToChat},{"adaptiveVolume",c.adaptiveVolume},{"autoPowerOff",c.autoPowerOff}})
+            {"speakToChat",c.speakToChat},{"adaptiveVolume",c.adaptiveVolume},{"autoPowerOff",c.autoPowerOff},
+            {"pauseWhenRemoved",c.pauseWhenRemoved},
+            {"connectedDevices",c.multipoint && _version == SonyProtocolVersion::V2}})
             _state.features[name].availability = supported ? "unknown" : "unsupported";
     }
     _transport->connect(address);
@@ -135,7 +139,7 @@ void SonyDevice::_setupSession() {
     if (_version == SonyProtocolVersion::V1) {
         _protocol = std::make_unique<protocol::ProtocolV1>(*_session);
     } else {
-        _protocol = std::make_unique<protocol::ProtocolV2>(*_session, _capabilities.tenBandEqualizer);
+        _protocol = std::make_unique<protocol::ProtocolV2>(*_session, _capabilities.tenBandEqualizer, _capabilities.ultBass);
     }
 
     _session->onNotification([this](const protocol::SonyFrame& frame) {
@@ -146,11 +150,24 @@ void SonyDevice::_setupSession() {
 }
 
 void SonyDevice::_onNotification(const protocol::SonyFrame& frame) {
+    if (frame.type == protocol::DataType::DataMdrNo2) {
+        if (frame.payload.size() < 2 || frame.payload[0] != 0x39 ||
+            (frame.payload[1] != 0 && frame.payload[1] != 2) || !_capabilities.multipoint) return;
+        try {
+            auto devices = protocol::decodeConnectedDevices(frame.payload);
+            std::lock_guard lock(_stateMutex);
+            _state.connectedDevices = std::move(devices);
+            _markSuccess("connectedDevices");
+        } catch (const SonyException& ex) { _markError("connectedDevices", ex); }
+        _dispatcher.dispatch(protocol::DeviceStateChanged{snapshot()});
+        return;
+    }
+    if (frame.type != protocol::DataType::DataMdr) return;
     protocol::DeviceStateSnapshot updated;
     std::string feature;
     {
         std::lock_guard lock(_stateMutex);
-        if (!_dispatcher.parseNotificationPayload(frame.payload, _state, false)) return;
+        if (!_dispatcher.parseNotificationPayload(frame.payload, _state, false, _capabilities.ultBass)) return;
         const auto opcode = frame.payload[0];
         feature = (opcode == 0x23 || opcode == 0x25) ? "battery" :
             (opcode == 0x67 || opcode == 0x69) ? "noiseControl" : "equalizer";
@@ -168,6 +185,19 @@ void SonyDevice::refreshAll() {
     refreshNoiseControl();
     refreshEqualizer();
     refreshDsee();
+    refreshPauseWhenRemoved();
+    refreshConnectedDevices();
+}
+
+void SonyDevice::refreshConnectedDevices() {
+    if (!_protocol || !_capabilities.multipoint || _version != SonyProtocolVersion::V2) return;
+    try {
+        auto devices = _protocol->getConnectedDevices();
+        std::lock_guard lock(_stateMutex);
+        _state.connectedDevices = std::move(devices);
+        _markSuccess("connectedDevices");
+    } catch (const SonyException& ex) { _markError("connectedDevices", ex); }
+    _dispatcher.dispatch(protocol::DeviceStateChanged{snapshot()});
 }
 
 void SonyDevice::refreshBattery() {
@@ -243,6 +273,43 @@ void SonyDevice::refreshDsee() {
     }
 }
 
+void SonyDevice::refreshPauseWhenRemoved() {
+    if (!_protocol || !_capabilities.pauseWhenRemoved) return;
+    try {
+        const bool enabled = _protocol->getPauseWhenRemoved();
+        {
+            std::lock_guard lock(_stateMutex);
+            _state.pauseWhenRemoved = enabled;
+            _markSuccess("pauseWhenRemoved");
+        }
+        _dispatcher.dispatch(protocol::DeviceStateChanged{snapshot()});
+    } catch (const SonyException& ex) { _markError("pauseWhenRemoved", ex); }
+}
+
+void SonyDevice::setPauseWhenRemoved(bool enabled) {
+    if (!_protocol || !_capabilities.pauseWhenRemoved)
+        throw SonyException(SonyErrorCode::Unsupported, "Pause on removal is not supported by this device");
+    try {
+        _protocol->setPauseWhenRemoved(enabled);
+        for (int attempt = 0; attempt < 4; ++attempt) {
+            if (attempt) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            const bool confirmed = _protocol->getPauseWhenRemoved();
+            if (confirmed != enabled) continue;
+            {
+                std::lock_guard lock(_stateMutex);
+                _state.pauseWhenRemoved = confirmed;
+                _markSuccess("pauseWhenRemoved");
+            }
+            _dispatcher.dispatch(protocol::DeviceStateChanged{snapshot()});
+            return;
+        }
+        throw SonyException(SonyErrorCode::InvalidResponse, "Headphones did not confirm the pause-on-removal setting");
+    } catch (const SonyException& ex) {
+        _markError("pauseWhenRemoved", ex);
+        throw;
+    }
+}
+
 void SonyDevice::setNoiseControl(const protocol::NoiseControlState& nc) {
     if (!_protocol) return;
     _protocol->setNoiseControl(nc);
@@ -275,6 +342,7 @@ void SonyDevice::setEqualizerPreset(int preset) {
     if (preset < 0 || preset > 255) return;
     if (!_protocol) return;
     _protocol->setEqualizerPreset(preset);
+    if (_capabilities.ultBass) { refreshEqualizer(); return; }
     {
         std::lock_guard lock(_stateMutex);
         _state.equalizer.preset = preset;
@@ -287,6 +355,7 @@ void SonyDevice::setEqualizerPreset(int preset) {
 void SonyDevice::setEqualizerCustom(int clearBass, const std::vector<int>& bands) {
     if (!_protocol) return;
     _protocol->setEqualizerCustom(clearBass, bands);
+    if (_capabilities.ultBass) { refreshEqualizer(); return; }
     {
         std::lock_guard lock(_stateMutex);
         _state.equalizer.preset = 0xa0; // MANUAL
@@ -354,12 +423,14 @@ void SonyDevice::_markError(const std::string& feature, const SonyException& ex)
 }
 void SonyDevice::refreshSettingsStep() {
     if (!_protocol || !isConnected()) return;
-    // Nine steps, each scheduled separately. Optional features are never probed
+    // Ten steps, each scheduled separately. Optional features are never probed
     // on profiles that don't advertise them.
-    const auto step = _refreshStep++ % 9;
+    const auto step = _refreshStep++ % 10;
     if (step == 0) { refreshNoiseControl(); return; }
     if (step == 1) { refreshEqualizer(); return; }
     if (step == 2) { refreshDsee(); return; }
+    if (step == 8) { refreshPauseWhenRemoved(); return; }
+    if (step == 9) { refreshConnectedDevices(); return; }
     std::string feature;
     try {
         if (step == 3 && _capabilities.codecInfo) {

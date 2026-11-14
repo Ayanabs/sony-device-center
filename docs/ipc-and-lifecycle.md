@@ -92,6 +92,14 @@ milliseconds, zero if never confirmed), and `error`. Missing battery values are
 JSON null. A transport ACK confirms acceptance, not an independently verified
 audio effect; model-specific protocol issues must still be tested on hardware.
 
+On V2 multipoint profiles, `connectedDevices` contains headset-reported connected
+hosts (`name`, `address`, `playbackDevice`), separate from the host's discovered
+headphones returned by `devices`. `features.connectedDevices.availability` must
+be `valid` and the headset connected before displaying these as live links.
+`playbackDevice` identifies the selected audio source, even when playback is
+paused. Missing table-2 support reports `unsupported`; this can change when
+multipoint is enabled. The worker rechecks support during regular refreshes.
+
 ## Qt worker and presentation
 
 `DeviceBackend` owns IPC or direct service access on a dedicated QThread.

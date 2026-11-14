@@ -226,7 +226,9 @@ const std::vector<DeviceProfile>& getStaticProfiles() {
                 .firmwareInfo = true,
                 .codecInfo = true,
                 .wearSensor = true,
-                .multipoint = true
+                .multipoint = true,
+                .ultBass = true,
+                .pauseWhenRemoved = true
             }
         },
         // LinkBuds S / WF-LS900N (V2 protocol, TWS dual battery, speak-to-chat, wear sensor)

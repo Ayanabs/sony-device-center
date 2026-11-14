@@ -18,6 +18,29 @@ using namespace sony::core;
 using namespace sony::transport;
 using Json = JsonProtocol::Json;
 
+TEST_CASE("Headset device list refreshes support and serializes connected hosts", "[core][json][connected-devices]") {
+    auto transport = std::make_shared<ReplyTransport>();
+    DeviceService service(transport);
+    service.connect(DeviceAddress("11:22:33:44:55:66"), "ULT WEAR");
+    auto* device = service.activeDevice();
+    REQUIRE(device);
+    CHECK(device->snapshot()->features.at("connectedDevices").availability == "unsupported");
+    transport->peripheralSupported = true;
+    device->refreshConnectedDevices();
+    const auto s = JsonProtocol::snapshot(service);
+    CHECK(s["capabilities"]["connectedDevices"] == true);
+    CHECK(s["features"]["connectedDevices"]["availability"] == "valid");
+    REQUIRE(s["connectedDevices"].size() == 2);
+    CHECK(s["connectedDevices"][0]["name"] == "Ayana\xe2\x80\x99s iPhone");
+    CHECK(s["connectedDevices"][1]["playbackDevice"] == true);
+    transport->malformedPeripherals = true;
+    device->refreshConnectedDevices();
+    CHECK(device->snapshot()->features.at("connectedDevices").availability == "stale");
+    transport->peripheralSupported = false;
+    device->refreshConnectedDevices();
+    CHECK(device->snapshot()->features.at("connectedDevices").availability == "unsupported");
+}
+
 TEST_CASE("Lifecycle retries with backoff and rediscovers without a restart", "[core][recovery]") {
     auto now = DeviceService::Clock::time_point{};
     auto transport = std::make_shared<ReplyTransport>();

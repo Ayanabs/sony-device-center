@@ -27,7 +27,7 @@ const std::vector<EqualizerPresetInfo>& equalizerPresets() noexcept {
         {EqualizerPreset::TrebleBoost, "treble-boost", "Treble Boost"},
         {EqualizerPreset::BassBoost,   "bass-boost",   "Bass Boost"},
         {EqualizerPreset::Speech,      "speech",       "Speech"},
-        {EqualizerPreset::Manual,      "manual",       "Manual"},
+        {EqualizerPreset::Manual,      "manual",       "Custom"},
     };
     return kPresets;
 }

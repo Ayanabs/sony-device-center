@@ -19,6 +19,10 @@ Json JsonProtocol::snapshot(IDeviceService& service) {
     auto s = service.snapshot();
     const auto c = dev ? dev->capabilities() : protocol::DeviceCapabilities{};
     Json features = Json::object();
+    Json connectedDevices = Json::array();
+    for (const auto& device : s->connectedDevices)
+        connectedDevices.push_back({{"name", device.name}, {"address", device.address},
+            {"playbackDevice", device.playbackDevice}});
     for (const auto& [name, status] : s->features) {
         features[name] = {{"availability", !connected && status.availability == "valid" ? "stale" : status.availability},
             {"lastSuccessMs", status.lastSuccessMs}, {"error", status.error}};
@@ -29,19 +33,24 @@ Json JsonProtocol::snapshot(IDeviceService& service) {
         {"lastError", service.lastError()}, {"protocol", dev ? std::string(protocol::to_string(dev->protocolVersion())) : "unknown"},
         {"capabilities", {{"anc", c.noiseCancelling}, {"ambient", c.ambientSound}, {"focusOnVoice", c.focusOnVoice},
             {"equalizer", c.equalizer}, {"clearBass", c.clearBass}, {"tenBandEqualizer", c.tenBandEqualizer},
+            {"ultBass", c.ultBass},
+            {"pauseWhenRemoved", c.pauseWhenRemoved},
+            {"connectedDevices", dev && c.multipoint && dev->protocolVersion() == protocol::SonyProtocolVersion::V2},
             {"dsee", c.dsee}, {"battery", c.battery},
             {"speakToChat", c.speakToChat}, {"adaptiveVolume", c.adaptiveVolume}, {"autoPowerOff", c.autoPowerOff}}},
         {"features", features},
+        {"connectedDevices", connectedDevices},
         {"battery", {{"main", optional(s->battery.main)}, {"left", optional(s->battery.left)}, {"right", optional(s->battery.right)},
             {"case", optional(s->battery.caseBattery)}, {"charging", s->battery.charging}}},
         {"noiseControl", {{"mode", s->noiseControl.mode == protocol::NoiseControlMode::NoiseCancelling ? "cancelling" :
             s->noiseControl.mode == protocol::NoiseControlMode::Ambient ? "ambient" : "off"},
             {"ambientLevel", s->noiseControl.ambientLevel}, {"focusOnVoice", s->noiseControl.focusOnVoice}}},
         {"equalizer", {{"preset", s->equalizer.preset}, {"presetName", protocol::equalizerPresetName(s->equalizer.preset)},
-            {"clearBass", s->equalizer.clearBass}, {"bands", s->equalizer.bands}}},
+            {"clearBass", s->equalizer.clearBass}, {"bands", s->equalizer.bands}, {"ultMode", s->equalizer.ultMode}}},
         {"dsee", s->dsee}, {"speakToChat", s->speakToChat}, {"adaptiveVolume", s->adaptiveVolume},
         {"autoPowerOff", s->autoPowerOff}, {"codec", s->codec.empty() ? "Unknown" : s->codec},
-        {"firmware", s->firmware.empty() ? "Unknown" : s->firmware}
+        {"firmware", s->firmware.empty() ? "Unknown" : s->firmware},
+        {"pauseWhenRemoved", s->pauseWhenRemoved}
     };
 }
 Json JsonProtocol::execute(const Json& request, IDeviceService& service) {
@@ -106,6 +115,7 @@ Json JsonProtocol::execute(const Json& request, IDeviceService& service) {
             } else if (method == "dsee") { supported(c.dsee); dev->setDsee(params.at("enabled").get<bool>()); }
             else if (method == "speakToChat") { supported(c.speakToChat); dev->setSpeakToChat(params.at("enabled").get<bool>()); }
             else if (method == "adaptiveVolume") { supported(c.adaptiveVolume); dev->setAdaptiveVolume(params.at("enabled").get<bool>()); }
+            else if (method == "pauseWhenRemoved") { supported(c.pauseWhenRemoved); dev->setPauseWhenRemoved(params.at("enabled").get<bool>()); }
             else if (method == "autoPowerOff") { supported(c.autoPowerOff); dev->setAutoPowerOff(integer(params, "index", 0, 5)); }
             else throw std::invalid_argument("Unknown method: " + method);
             data = snapshot(service);

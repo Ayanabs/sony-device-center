@@ -15,6 +15,13 @@ struct BatteryState {
     bool charging{false};
 };
 
+struct ConnectedDevice {
+    std::string address;
+    std::string name;
+    // Headset-selected playback device; this does not imply media is playing.
+    bool playbackDevice{false};
+};
+
 enum class NoiseControlMode {
     Off,
     NoiseCancelling,
@@ -30,6 +37,8 @@ struct NoiseControlState {
 struct EqualizerState {
     int preset{0};
     int clearBass{0};
+    // ULT WEAR reports this separately from its EQ preset: 0=Off, 1/2=ULT.
+    int ultMode{-1};
     // 5 elements (+ clearBass) on legacy devices; 10 elements, no separate
     // clearBass, on newer devices such as the WH-1000XM6 -- see
     // DeviceCapabilities::tenBandEqualizer.

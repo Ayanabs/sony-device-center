@@ -1,5 +1,7 @@
 #include "sony/protocol/ProtocolV2.h"
 #include "ProtocolHelpers.h"
+#include "sony/protocol/EqualizerCodec.h"
+#include "sony/protocol/PeripheralCodec.h"
 #include <algorithm>
 
 namespace sony::protocol {
@@ -26,8 +28,8 @@ int apoIndexFromCode(uint8_t c0, uint8_t c1) {
 
 } // namespace
 
-ProtocolV2::ProtocolV2(SonyProtocolSession& session, bool tenBandEqualizer)
-    : _session(session), _tenBandEqualizer(tenBandEqualizer) {}
+ProtocolV2::ProtocolV2(SonyProtocolSession& session, bool tenBandEqualizer, bool ultBass)
+    : _session(session), _tenBandEqualizer(tenBandEqualizer), _ultBass(ultBass) {}
 
 void ProtocolV2::initDevice() {
     // V2 handshake init: 0x00 0x00 -> RET 0x01
@@ -39,6 +41,27 @@ void ProtocolV2::initDevice() {
             std::chrono::milliseconds(1000)
         );
     } catch (const SonyException&) {}
+}
+
+std::vector<ConnectedDevice> ProtocolV2::getConnectedDevices() {
+    // Support changes when multipoint is switched on/off; inquire each refresh.
+    const auto support = _session.sendAndAwaitResponse(
+        {DataType::DataMdrNo2, 0, {0x06, 0}}, 0x07, 0, std::chrono::milliseconds(1000));
+    const auto& p = support.payload;
+    if (p.size() < 3 || p.size() != 3 + 2 * static_cast<size_t>(p[2]))
+        throw SonyException(SonyErrorCode::InvalidResponse, "Malformed table-2 support list");
+    int subtype = -1;
+    for (size_t i = 3; i < p.size(); i += 2) {
+        if (p[i] == 0x30 && subtype < 0) subtype = 0;
+        if (p[i] == 0x32 || p[i] == 0x33) subtype = 2;
+    }
+    if (subtype < 0)
+        throw SonyException(SonyErrorCode::Unsupported,
+            "Headset device list unavailable; enable multipoint to use this feature");
+    const auto reply = _session.sendAndAwaitResponse(
+        {DataType::DataMdrNo2, 0, {0x36, static_cast<uint8_t>(subtype)}},
+        0x37, subtype, std::chrono::milliseconds(1000));
+    return decodeConnectedDevices(reply.payload);
 }
 
 BatteryState ProtocolV2::getBattery() {
@@ -147,40 +170,27 @@ EqualizerState ProtocolV2::getEqualizer() {
     // 10-band (e.g. WH-1000XM6): GET 56 04 -> RET 57 04 <preset> 0a <b1..b10>,
     // no separate Clear Bass slot. Reverse-engineered from a Sound Connect
     // btsnoop capture -- see issue #10.
-    const uint8_t inquired = _tenBandEqualizer ? 0x04 : 0x00;
+    const uint8_t inquired = _ultBass ? 0x03 : _tenBandEqualizer ? 0x04 : 0x00;
     auto resp = _session.sendAndAwaitResponse(
         SonyFrame{ .type = DataType::DataMdr, .payload = {0x56, inquired} },
         0x57,
-        -1,
+        inquired,
         std::chrono::milliseconds(1000)
     );
 
     if (resp.payload.size() < 4 || resp.payload[1] != inquired)
         throw SonyException(SonyErrorCode::InvalidResponse, "Incomplete equalizer response");
-    EqualizerState state;
-    state.preset = static_cast<int>(resp.payload[2]);
-    const size_t count = resp.payload[3];
-    if (resp.payload.size() < 4 + count)
-        throw SonyException(SonyErrorCode::InvalidResponse, "Truncated equalizer response");
-    if (_tenBandEqualizer) {
-        // <preset> 0a <b1..b10>, raw units, no bias.
-        state.clearBass = 0;
-        state.bands.assign(count, 0);
-        for (size_t i = 0; i < count; ++i) {
-            state.bands[i] = static_cast<int>(resp.payload[4 + i]);
-        }
-    } else if (count >= 1) {
-        // <preset> 06 <bass+10> <b1..b5 +10>
-        state.clearBass = static_cast<int>(resp.payload[4]) - 10;
-        state.bands.assign(count - 1, 0);
-        for (size_t i = 0; i + 1 < count; ++i) {
-            state.bands[i] = static_cast<int>(resp.payload[5 + i]) - 10;
-        }
-    }
-    return state;
+    return decodeEqualizer(resp.payload, _ultBass);
 }
 
 void ProtocolV2::setEqualizerPreset(int preset) {
+    if (_ultBass) {
+        // Read the current ULT mode so selecting an EQ does not change ULT.
+        const auto eq = getEqualizer();
+        _session.send(SonyFrame{ .type = DataType::DataMdr,
+            .payload = {0x58, 0x03, static_cast<uint8_t>(preset), static_cast<uint8_t>(eq.ultMode), 0x00} });
+        return;
+    }
     // SET preset: 58 <inquired> <preset> 00 -- same shape on both layouts,
     // only the inquired-type byte differs.
     std::vector<uint8_t> payload = {
@@ -193,6 +203,15 @@ void ProtocolV2::setEqualizerPreset(int preset) {
 }
 
 void ProtocolV2::setEqualizerCustom(int clearBass, const std::vector<int>& bands) {
+    if (_ultBass) {
+        if (bands.size() != 5)
+            throw SonyException(SonyErrorCode::InvalidResponse, "ULT WEAR requires five equalizer bands");
+        const auto eq = getEqualizer();
+        std::vector<uint8_t> payload{0x58, 0x03, 0xa0, static_cast<uint8_t>(eq.ultMode), 0x06, clampEqValue(clearBass)};
+        for (int band : bands) payload.push_back(clampEqValue(band));
+        _session.send(SonyFrame{ .type = DataType::DataMdr, .payload = std::move(payload) });
+        return;
+    }
     if (_tenBandEqualizer) {
         // SET custom: 58 04 A0 <bands.size()> <b1..bN>, raw units, no bias,
         // no separate Clear Bass slot (clearBass is ignored).
@@ -220,6 +239,21 @@ void ProtocolV2::setEqualizerCustom(int clearBass, const std::vector<int>& bands
         payload.push_back(clampEqValue(b));
     }
     _session.send(SonyFrame{ .type = DataType::DataMdr, .payload = std::move(payload) });
+}
+
+bool ProtocolV2::getPauseWhenRemoved() {
+    const auto response = _session.sendAndAwaitResponse(
+        SonyFrame{ .type = DataType::DataMdr, .payload = {0xf6, 0x01} },
+        0xf7, 0x01, std::chrono::milliseconds(1000));
+    if (response.payload.size() != 3 || response.payload[2] > 1)
+        throw SonyException(SonyErrorCode::InvalidResponse, "Invalid pause-on-removal response");
+    // V2 uses a disabled flag: zero enables automatic pause.
+    return response.payload[2] == 0;
+}
+
+void ProtocolV2::setPauseWhenRemoved(bool enabled) {
+    _session.send(SonyFrame{ .type = DataType::DataMdr,
+        .payload = {0xf8, 0x01, static_cast<uint8_t>(enabled ? 0 : 1)} });
 }
 
 bool ProtocolV2::getDsee() {

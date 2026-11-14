@@ -26,16 +26,18 @@ std::vector<uint8_t> firstRequestPayload(const FakeTransport& fake) {
     return payloads.empty() ? std::vector<uint8_t>{} : payloads.front();
 }
 
-void queueReply(FakeTransport& fake, std::vector<uint8_t> payload) {
-    fake.queueIncoming(FrameCodec::encode(SonyFrame{ .type = DataType::Ack, .sequence = 0 }));
-    fake.queueIncoming(FrameCodec::encode(SonyFrame{ .type = DataType::DataMdr, .sequence = 1, .payload = std::move(payload) }));
+void queueReply(ReplyingFakeTransport& fake, std::vector<uint8_t> payload) {
+    fake.queueReply({
+        SonyFrame{ .type = DataType::Ack, .sequence = 0 },
+        SonyFrame{ .type = DataType::DataMdr, .sequence = 1, .payload = std::move(payload) }
+    });
 }
 
 } // namespace
 
 TEST_CASE("ProtocolV1: explicit regression - battery request must NEVER send opcode 0x22", "[protocol][v1][regression]")
 {
-    FakeTransport fake;
+    ReplyingFakeTransport fake;
     SonyProtocolSession session(&fake);
     session.connect("11:22:33:44:55:66");
 
@@ -65,7 +67,7 @@ TEST_CASE("ProtocolV1: explicit regression - battery request must NEVER send opc
 
 TEST_CASE("ProtocolV1: an over-ear dual reply with an empty right slot is a single reading", "[protocol][v1]")
 {
-    FakeTransport fake;
+    ReplyingFakeTransport fake;
     SonyProtocolSession session(&fake);
     session.connect("11:22:33:44:55:66");
     ProtocolV1 v1(session);
@@ -73,9 +75,11 @@ TEST_CASE("ProtocolV1: an over-ear dual reply with an empty right slot is a sing
     // Single query is acknowledged but never answered; the dual query then
     // comes back as 11 01 <L=50> <chg> <R=0> <chg>, which is how a WH-1000XM4
     // echoes its one cell.
-    fake.queueIncoming(FrameCodec::encode(SonyFrame{ .type = DataType::Ack, .sequence = 0 }));
-    fake.queueIncoming(FrameCodec::encode(SonyFrame{ .type = DataType::Ack, .sequence = 1 }));
-    fake.queueIncoming(FrameCodec::encode(SonyFrame{ .type = DataType::DataMdr, .sequence = 0, .payload = {0x11, 0x01, 50, 0, 0, 0} }));
+    fake.queueReply({ SonyFrame{ .type = DataType::Ack, .sequence = 0 } });
+    fake.queueReply({
+        SonyFrame{ .type = DataType::Ack, .sequence = 1 },
+        SonyFrame{ .type = DataType::DataMdr, .sequence = 0, .payload = {0x11, 0x01, 50, 0, 0, 0} }
+    });
 
     auto battery = v1.getBattery();
     REQUIRE(battery.main.has_value());
@@ -86,7 +90,7 @@ TEST_CASE("ProtocolV1: an over-ear dual reply with an empty right slot is a sing
 
 TEST_CASE("ProtocolV1: decodes noise-control readback", "[protocol][v1]")
 {
-    FakeTransport fake;
+    ReplyingFakeTransport fake;
     SonyProtocolSession session(&fake);
     session.connect("11:22:33:44:55:66");
     ProtocolV1 v1(session);
@@ -169,7 +173,7 @@ TEST_CASE("ProtocolV1: sets noise control with V1 packet layout", "[protocol][v1
 
 TEST_CASE("ProtocolV1: reads the equalizer behind inquired type 0x01", "[protocol][v1]")
 {
-    FakeTransport fake;
+    ReplyingFakeTransport fake;
     SonyProtocolSession session(&fake);
     session.connect("11:22:33:44:55:66");
     ProtocolV1 v1(session);
@@ -203,7 +207,7 @@ TEST_CASE("ProtocolV1: writes equalizer presets and custom bands", "[protocol][v
 
 TEST_CASE("ProtocolV1: reads firmware version and codec", "[protocol][v1]")
 {
-    FakeTransport fake;
+    ReplyingFakeTransport fake;
     SonyProtocolSession session(&fake);
     session.connect("11:22:33:44:55:66");
     ProtocolV1 v1(session);
@@ -254,7 +258,7 @@ TEST_CASE("ProtocolV1: reads and writes Speak-to-Chat via Smart Talking Mode", "
 
     SECTION("GET f6 05, on when value at [3] is nonzero even if [2] is zero")
     {
-        FakeTransport fake;
+        ReplyingFakeTransport fake;
         SonyProtocolSession session(&fake);
         session.connect("11:22:33:44:55:66");
         ProtocolV1 v1(session);
@@ -266,7 +270,7 @@ TEST_CASE("ProtocolV1: reads and writes Speak-to-Chat via Smart Talking Mode", "
 
     SECTION("GET treats a zero value at [3] as off")
     {
-        FakeTransport fake;
+        ReplyingFakeTransport fake;
         SonyProtocolSession session(&fake);
         session.connect("11:22:33:44:55:66");
         ProtocolV1 v1(session);
@@ -277,7 +281,7 @@ TEST_CASE("ProtocolV1: reads and writes Speak-to-Chat via Smart Talking Mode", "
 
     SECTION("GET still reads enable from [3] when the middle byte is 0x01")
     {
-        FakeTransport fake;
+        ReplyingFakeTransport fake;
         SonyProtocolSession session(&fake);
         session.connect("11:22:33:44:55:66");
         ProtocolV1 v1(session);
@@ -288,7 +292,7 @@ TEST_CASE("ProtocolV1: reads and writes Speak-to-Chat via Smart Talking Mode", "
 
     SECTION("GET treats payload[2] == 0x02 as an active talking session, not off")
     {
-        FakeTransport fake;
+        ReplyingFakeTransport fake;
         SonyProtocolSession session(&fake);
         session.connect("11:22:33:44:55:66");
         ProtocolV1 v1(session);
@@ -299,7 +303,7 @@ TEST_CASE("ProtocolV1: reads and writes Speak-to-Chat via Smart Talking Mode", "
 
     SECTION("GET rejects a truncated reply")
     {
-        FakeTransport fake;
+        ReplyingFakeTransport fake;
         SonyProtocolSession session(&fake);
         session.connect("11:22:33:44:55:66");
         ProtocolV1 v1(session);
@@ -332,7 +336,7 @@ TEST_CASE("ProtocolV1: reads and writes Speak-to-Chat via Smart Talking Mode", "
 
 TEST_CASE("ProtocolV1: unsupported features throw Unsupported", "[protocol][v1]")
 {
-    FakeTransport fake;
+    ReplyingFakeTransport fake;
     SonyProtocolSession session(&fake);
     session.connect("11:22:33:44:55:66");
 

@@ -60,6 +60,8 @@ struct DeviceCapabilities
     bool wearSensor = false;
 
     bool multipoint = false;
+    bool ultBass = false;
+    bool pauseWhenRemoved = false;
 };
 
 struct DeviceProfile

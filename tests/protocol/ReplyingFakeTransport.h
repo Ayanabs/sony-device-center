@@ -63,8 +63,8 @@ private:
             bytes.push_back(static_cast<uint8_t>(b));
         }
         try {
-            return sony::protocol::FrameCodec::decode(bytes).type
-                == sony::protocol::DataType::DataMdr;
+            const auto type = sony::protocol::FrameCodec::decode(bytes).type;
+            return type == sony::protocol::DataType::DataMdr || type == sony::protocol::DataType::DataMdrNo2;
         } catch (...) {
             return false;
         }

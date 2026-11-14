@@ -29,6 +29,8 @@ struct DeviceState {
     int autoPowerOff{0};
     bool speakToChat{false};
     bool adaptiveVolume{false};
+    bool pauseWhenRemoved{false};
+    std::vector<ConnectedDevice> connectedDevices;
 };
 
 using DeviceStateSnapshot = std::shared_ptr<const DeviceState>;

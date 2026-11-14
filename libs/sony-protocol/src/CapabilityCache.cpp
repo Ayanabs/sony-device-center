@@ -23,7 +23,9 @@ std::string serializeCapabilities(const DeviceCapabilities& caps) {
        << (caps.firmwareInfo ? "1" : "0") << ","
        << (caps.codecInfo ? "1" : "0") << ","
        << (caps.wearSensor ? "1" : "0") << ","
-       << (caps.multipoint ? "1" : "0");
+       << (caps.multipoint ? "1" : "0") << ","
+       << (caps.ultBass ? "1" : "0") << ","
+       << (caps.pauseWhenRemoved ? "1" : "0");
     return ss.str();
 }
 
@@ -54,6 +56,8 @@ std::optional<DeviceCapabilities> deserializeCapabilities(std::string_view str) 
     caps.codecInfo = bits[12];
     caps.wearSensor = bits[13];
     caps.multipoint = bits[14];
+    caps.ultBass = bits.size() > 15 && bits[15];
+    caps.pauseWhenRemoved = bits.size() > 16 && bits[16];
     return caps;
 }
 

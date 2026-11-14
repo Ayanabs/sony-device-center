@@ -47,6 +47,8 @@ public:
     void refreshNoiseControl();
     void refreshEqualizer();
     void refreshDsee();
+    void refreshPauseWhenRemoved();
+    void refreshConnectedDevices();
     void refreshSettingsStep();
 
     // Control operations
@@ -59,6 +61,7 @@ public:
     void setAutoPowerOff(int index);
     void setSpeakToChat(bool enabled);
     void setAdaptiveVolume(bool enabled);
+    void setPauseWhenRemoved(bool enabled);
 
 private:
     unsigned _refreshStep{0};

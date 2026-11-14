@@ -3,6 +3,7 @@
 #include "sony/protocol/FrameCodec.h"
 #include "sony/transport/FakeTransport.h"
 #include "sony/transport/SonyError.h"
+#include "ReplyingFakeTransport.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -13,6 +14,7 @@
 using namespace sony;
 using namespace sony::protocol;
 using namespace sony::transport;
+using sony::test::ReplyingFakeTransport;
 
 namespace {
 
@@ -38,9 +40,67 @@ void queueFrame(FakeTransport& transport, const SonyFrame& frame) {
 
 } // namespace
 
+TEST_CASE("SonyProtocolSession: table 2 replies are acknowledged and matched by channel", "[protocol][session][table2]")
+{
+    std::vector<SonyFrame> notifications;
+    std::mutex notifMtx;
+    std::condition_variable notifCv;
+    ReplyingFakeTransport fake;
+    SonyProtocolSession session(&fake);
+    session.connect("11:22:33:44:55:66");
+    session.onNotification([&](const SonyFrame& frame) {
+        std::lock_guard lock(notifMtx);
+        notifications.push_back(frame);
+        notifCv.notify_all();
+    });
+    session.setSequenceNumber(1);
+    const SonyFrame request{DataType::DataMdrNo2, 0, {0xf2, 0x00}};
+    const SonyFrame response{DataType::DataMdrNo2, 1, {0xf3, 0x00, 0x04}};
+    // A table 1 message with the same opcode/subtype must not satisfy this request.
+    fake.queueReply({makeAckFrame(0), makeDataFrame(0, {0xf3, 0x00, 0x00}), response});
+    const auto result = session.sendAndAwaitResponse(request, 0xf3, 0, std::chrono::milliseconds(1000));
+    REQUIRE(result.type == DataType::DataMdrNo2);
+    REQUIRE(result.payload == response.payload);
+    const auto frames = fake.sentFrames();
+    REQUIRE(frames.size() == 3);
+    REQUIRE(FrameCodec::decode(frames[0]).sequence == 1);
+    REQUIRE(FrameCodec::decode(frames[1]).type == DataType::Ack);
+    REQUIRE(FrameCodec::decode(frames[1]).sequence == 1);
+    REQUIRE(FrameCodec::decode(frames[2]).type == DataType::Ack);
+    REQUIRE(FrameCodec::decode(frames[2]).sequence == 0);
+    std::unique_lock lock(notifMtx);
+    REQUIRE(notifications.size() == 1);
+    REQUIRE(notifications[0].type == DataType::DataMdr);
+}
+
+TEST_CASE("SonyProtocolSession: table 2 notifications are dispatched and duplicates acknowledged", "[protocol][session][table2]")
+{
+    std::vector<SonyFrame> notifications;
+    std::mutex notifMtx;
+    std::condition_variable notifCv;
+    ReplyingFakeTransport fake;
+    SonyProtocolSession session(&fake);
+    session.connect("11:22:33:44:55:66");
+    session.onNotification([&](const SonyFrame& frame) {
+        std::lock_guard lock(notifMtx);
+        notifications.push_back(frame);
+        notifCv.notify_all();
+    });
+    const SonyFrame notification{DataType::DataMdrNo2, 0, {0xf5, 0x00, 0x04}};
+    const SonyFrame response{DataType::DataMdrNo2, 1, {0xf3, 0x00, 0x00}};
+    fake.queueReply({notification, notification, response});
+    const auto result = session.sendAndAwaitResponse(
+        {DataType::DataMdrNo2, 0, {0xf2, 0}}, 0xf3, 0, std::chrono::milliseconds(1000));
+    REQUIRE(result.payload == response.payload);
+    std::unique_lock lock(notifMtx);
+    REQUIRE(notifications.size() == 1);
+    REQUIRE(notifications[0].payload == notification.payload);
+    REQUIRE(fake.sentCount() == 4); // request + ACK for both copies + reply ACK
+}
+
 TEST_CASE("SonyProtocolSession: ACK before response completes successfully", "[protocol][session]")
 {
-    FakeTransport fake;
+    ReplyingFakeTransport fake;
     SonyProtocolSession session(&fake);
     session.connect("11:22:33:44:55:66");
     REQUIRE(session.isConnected());
@@ -49,8 +109,7 @@ TEST_CASE("SonyProtocolSession: ACK before response completes successfully", "[p
     SonyFrame ack = makeAckFrame(0);
     SonyFrame response = makeDataFrame(1, {0x02, 0x02, 0x50});
 
-    queueFrame(fake, ack);
-    queueFrame(fake, response);
+    fake.queueReply({ack, response});
 
     SonyFrame result = session.sendAndAwaitResponse(request, 0x02, 0x02, std::chrono::milliseconds(1000));
     REQUIRE(result.type == DataType::DataMdr);
@@ -65,7 +124,7 @@ TEST_CASE("SonyProtocolSession: ACK before response completes successfully", "[p
 
 TEST_CASE("SonyProtocolSession: response before unrelated notification", "[protocol][session]")
 {
-    FakeTransport fake;
+    ReplyingFakeTransport fake;
     SonyProtocolSession session(&fake);
     session.connect("11:22:33:44:55:66");
 
@@ -84,9 +143,7 @@ TEST_CASE("SonyProtocolSession: response before unrelated notification", "[proto
     SonyFrame response = makeDataFrame(1, {0x02, 0x02, 0x50});
     SonyFrame unrelatedNotif = makeDataFrame(0, {0x04, 0x01, 0x10});
 
-    queueFrame(fake, ack);
-    queueFrame(fake, response);
-    queueFrame(fake, unrelatedNotif);
+    fake.queueReply({ack, response, unrelatedNotif});
 
     SonyFrame result = session.sendAndAwaitResponse(request, 0x02, 0x02, std::chrono::milliseconds(1000));
     REQUIRE(result.payload == std::vector<uint8_t>{0x02, 0x02, 0x50});
@@ -102,7 +159,7 @@ TEST_CASE("SonyProtocolSession: response before unrelated notification", "[proto
 
 TEST_CASE("SonyProtocolSession: notification between ACK and response", "[protocol][session]")
 {
-    FakeTransport fake;
+    ReplyingFakeTransport fake;
     SonyProtocolSession session(&fake);
     session.connect("11:22:33:44:55:66");
 
@@ -121,9 +178,7 @@ TEST_CASE("SonyProtocolSession: notification between ACK and response", "[protoc
     SonyFrame notif = makeDataFrame(1, {0x09, 0x01, 0x99});
     SonyFrame response = makeDataFrame(0, {0x02, 0x02, 0x88});
 
-    queueFrame(fake, ack);
-    queueFrame(fake, notif);
-    queueFrame(fake, response);
+    fake.queueReply({ack, notif, response});
 
     SonyFrame result = session.sendAndAwaitResponse(request, 0x02, 0x02, std::chrono::milliseconds(1000));
     REQUIRE(result.payload == std::vector<uint8_t>{0x02, 0x02, 0x88});
@@ -178,7 +233,7 @@ TEST_CASE("SonyProtocolSession: dispatches multiple notifications in order", "[p
 
 TEST_CASE("SonyProtocolSession: timeouts on missing ACK or missing response", "[protocol][session]")
 {
-    FakeTransport fake;
+    ReplyingFakeTransport fake;
     SonyProtocolSession session(&fake);
     session.connect("11:22:33:44:55:66");
 
@@ -197,7 +252,7 @@ TEST_CASE("SonyProtocolSession: timeouts on missing ACK or missing response", "[
     {
         SonyFrame request = makeDataFrame(0, {0x02, 0x01});
         SonyFrame ack = makeAckFrame(0);
-        queueFrame(fake, ack);
+        fake.queueReply({ack});
 
         try {
             session.sendAndAwaitResponse(request, 0x02, -1, std::chrono::milliseconds(50));
@@ -307,7 +362,7 @@ TEST_CASE("SonyProtocolSession: rejects invalid frame without crashing and recov
 
 TEST_CASE("SonyProtocolSession: manages sequence numbers and handles rollover at 255", "[protocol][session]")
 {
-    FakeTransport fake;
+    ReplyingFakeTransport fake;
     SonyProtocolSession session(&fake);
     session.connect("11:22:33:44:55:66");
 
@@ -327,10 +382,10 @@ TEST_CASE("SonyProtocolSession: manages sequence numbers and handles rollover at
     // Verify wire sequence rollover across send calls
     session.setSequenceNumber(255);
 
-    queueFrame(fake, makeAckFrame(255));
+    fake.queueReply({makeAckFrame(255)});
     session.send(makeDataFrame(0, {0x01}));
 
-    queueFrame(fake, makeAckFrame(0));
+    fake.queueReply({makeAckFrame(0)});
     session.send(makeDataFrame(0, {0x02}));
 
     REQUIRE(fake.sentCount() == 2);
@@ -339,6 +394,46 @@ TEST_CASE("SonyProtocolSession: manages sequence numbers and handles rollover at
 
     auto sent2 = FrameCodec::decode(fake.sentFrames()[1]);
     REQUIRE(sent2.sequence == 0);
+}
+
+TEST_CASE("SonyProtocolSession: old EQ replies cannot satisfy a new refresh", "[protocol][session][regression]")
+{
+    std::mutex mutex;
+    std::condition_variable received;
+    bool oldReplyDispatched = false;
+    ReplyingFakeTransport fake;
+    SonyProtocolSession session(&fake);
+    session.onNotification([&](const SonyFrame&) {
+        std::lock_guard lock(mutex);
+        oldReplyDispatched = true;
+        received.notify_all();
+    });
+    session.connect("11:22:33:44:55:66");
+
+    // A late reply says Manual before the user selects a named preset.
+    queueFrame(fake, makeDataFrame(0, {0x57, 0x00, 0xa0, 0x00}));
+    {
+        std::unique_lock lock(mutex);
+        REQUIRE(received.wait_for(lock, std::chrono::seconds(1), [&] { return oldReplyDispatched; }));
+    }
+    fake.queueReply({makeAckFrame(1)});
+    session.send(makeDataFrame(0, {0x58, 0x00, 0x16, 0x00}));
+
+    SECTION("a refresh returns the fresh preset") {
+        fake.queueReply({makeAckFrame(0), makeDataFrame(1, {0x57, 0x00, 0x16, 0x00})});
+        const auto response = session.sendAndAwaitResponse(makeDataFrame(0, {0x56, 0x00}), 0x57, 0x00);
+        REQUIRE(response.payload[2] == 0x16);
+    }
+    SECTION("a missing fresh reply times out instead of reporting Manual") {
+        fake.queueReply({makeAckFrame(0)});
+        try {
+            session.sendAndAwaitResponse(makeDataFrame(0, {0x56, 0x00}), 0x57, 0x00,
+                                         std::chrono::milliseconds(50));
+            FAIL("An old Manual reply must not count as a fresh reading");
+        } catch (const SonyException& ex) {
+            REQUIRE(ex.code() == SonyErrorCode::Timeout);
+        }
+    }
 }
 
 TEST_CASE("SonyProtocolSession: supports transport ownership models", "[protocol][session]")

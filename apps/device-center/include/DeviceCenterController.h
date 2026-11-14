@@ -35,6 +35,10 @@ class DeviceCenterController : public QObject {
     Q_PROPERTY(QString equalizerPresetName READ equalizerPresetName NOTIFY stateChanged)
     Q_PROPERTY(int clearBass READ clearBass NOTIFY stateChanged)
     Q_PROPERTY(QVariantList equalizerBands READ equalizerBands NOTIFY stateChanged)
+    Q_PROPERTY(int ultMode READ ultMode NOTIFY stateChanged)
+    Q_PROPERTY(bool hasUlt READ hasUlt NOTIFY capabilitiesChanged)
+    Q_PROPERTY(bool pauseWhenRemoved READ pauseWhenRemoved NOTIFY stateChanged)
+    Q_PROPERTY(bool hasPauseWhenRemoved READ hasPauseWhenRemoved NOTIFY capabilitiesChanged)
     Q_PROPERTY(bool dsee READ dsee NOTIFY stateChanged)
     Q_PROPERTY(bool speakToChat READ speakToChat NOTIFY stateChanged)
     Q_PROPERTY(bool adaptiveVolume READ adaptiveVolume NOTIFY stateChanged)
@@ -51,6 +55,9 @@ class DeviceCenterController : public QObject {
     Q_PROPERTY(bool hasAdaptiveVolume READ hasAdaptiveVolume NOTIFY capabilitiesChanged)
 
     Q_PROPERTY(QVariantList pairedDevices READ pairedDevices NOTIFY pairedDevicesChanged)
+    Q_PROPERTY(QVariantList connectedDevices READ connectedDevices NOTIFY stateChanged)
+    Q_PROPERTY(QString connectedDevicesStatus READ connectedDevicesStatus NOTIFY stateChanged)
+    Q_PROPERTY(bool hasConnectedDevices READ hasConnectedDevices NOTIFY capabilitiesChanged)
 
     Q_PROPERTY(bool autostart READ autostart WRITE setAutostart NOTIFY autostartChanged)
     Q_PROPERTY(QString appVersion READ appVersion CONSTANT)
@@ -79,6 +86,10 @@ public:
     [[nodiscard]] QString equalizerPresetName() const;
     [[nodiscard]] int clearBass() const;
     [[nodiscard]] QVariantList equalizerBands() const;
+    [[nodiscard]] int ultMode() const { return _ultMode; }
+    [[nodiscard]] bool hasUlt() const { return _capabilities.value("ultBass").toBool(); }
+    [[nodiscard]] bool pauseWhenRemoved() const { return _pauseWhenRemoved; }
+    [[nodiscard]] bool hasPauseWhenRemoved() const { return _capabilities.value("pauseWhenRemoved").toBool(); }
     [[nodiscard]] bool dsee() const;
     [[nodiscard]] bool speakToChat() const;
     [[nodiscard]] bool adaptiveVolume() const;
@@ -95,6 +106,9 @@ public:
     [[nodiscard]] bool hasAdaptiveVolume() const;
 
     [[nodiscard]] QVariantList pairedDevices() const;
+    QVariantList connectedDevices() const { return _connectedDevices; }
+    QString connectedDevicesStatus() const { return _connectedDevicesStatus; }
+    bool hasConnectedDevices() const { return _capabilities.value("connectedDevices").toBool(); }
 
     [[nodiscard]] bool autostart() const;
     [[nodiscard]] QString appVersion() const;
@@ -106,6 +120,7 @@ public:
     Q_INVOKABLE void setNoiseControlOff();
     Q_INVOKABLE void setEqualizerPreset(int preset);
     Q_INVOKABLE void setEqualizerCustom(int clearBass, const QVariantList& bands);
+    Q_INVOKABLE void setPauseWhenRemoved(bool enabled);
     Q_INVOKABLE void setDsee(bool enabled);
     Q_INVOKABLE void setSpeakToChat(bool enabled);
     Q_INVOKABLE void setAdaptiveVolume(bool enabled);
@@ -150,12 +165,16 @@ private:
     int _equalizerPreset{0x00};
     QString _equalizerPresetName{"Off"};
     int _clearBass{0};
+    int _ultMode{-1};
+    bool _pauseWhenRemoved{false};
     QVariantList _equalizerBands{0, 0, 0, 0, 0};
     bool _dsee{false};
     bool _speakToChat{false};
     bool _adaptiveVolume{false};
     int _autoPowerOff{0};
     QVariantList _pairedDevices;
+    QVariantList _connectedDevices;
+    QString _connectedDevicesStatus{"unknown"};
     QString _currentLanguage{"en"};
 
 };

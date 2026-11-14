@@ -65,7 +65,9 @@ void DeviceCenterController::_applySnapshot(const QByteArray& data) {
     if (s.contains("name")) _deviceName = s.value("name").toString();
     if (s.contains("address")) _deviceAddress = s.value("address").toString();
     if (!s.contains("features")) {
+        _connectedDevices.clear(); _connectedDevicesStatus = "unknown";
         _batteryLevel = -1; _noiseControlMode = "unknown";
+        _ultMode = -1;
         emit stateChanged(); return;
     }
     _features = s.value("features").toObject().toVariantMap();
@@ -74,16 +76,27 @@ void DeviceCenterController::_applySnapshot(const QByteArray& data) {
         return s.value("features").toObject().value(feature).toObject().value("availability").toString() == "valid";
     };
     const auto battery = s.value("battery").toObject();
+    _connectedDevicesStatus = _connected ? s.value("features").toObject().value("connectedDevices")
+        .toObject().value("availability").toString("unknown") : "unknown";
+    _connectedDevices = _connected && valid("connectedDevices")
+        ? s.value("connectedDevices").toArray().toVariantList() : QVariantList{};
     _batteryLevel = _connected && valid("battery") ? battery.value("main").toInt(-1) : -1;
     _isCharging = _connected && battery.value("charging").toBool();
     const auto nc = s.value("noiseControl").toObject();
     _noiseControlMode = _connected && valid("noiseControl") ? nc.value("mode").toString() : "unknown";
-    _ambientLevel = nc.value("ambientLevel").toInt(); _focusOnVoice = nc.value("focusOnVoice").toBool();
+    // ANC/Off report zero, which is not a valid ambient command level.
+    // Keep the last confirmed ambient level for the next mode switch.
+    const int ambientLevel = nc.value("ambientLevel").toInt();
+    if (_connected && valid("noiseControl") && _noiseControlMode == "ambient" && ambientLevel >= 1 && ambientLevel <= 20)
+        _ambientLevel = ambientLevel;
+    _focusOnVoice = nc.value("focusOnVoice").toBool();
     const auto eq = s.value("equalizer").toObject();
+    _ultMode = _connected && valid("equalizer") ? eq.value("ultMode").toInt(-1) : -1;
     _equalizerPreset = valid("equalizer") ? eq.value("preset").toInt() : -1;
     _equalizerPresetName = valid("equalizer") ? eq.value("presetName").toString() : "Unknown";
     _clearBass = eq.value("clearBass").toInt(); _equalizerBands = eq.value("bands").toArray().toVariantList();
     _dsee = s.value("dsee").toBool(); _speakToChat = s.value("speakToChat").toBool();
+    _pauseWhenRemoved = s.value("pauseWhenRemoved").toBool();
     _adaptiveVolume = s.value("adaptiveVolume").toBool(); _autoPowerOff = s.value("autoPowerOff").toInt();
     _codec = _connected && valid("codec") ? s.value("codec").toString("Unknown") : "Unknown";
     emit stateChanged(); emit capabilitiesChanged();
@@ -151,13 +164,17 @@ bool DeviceCenterController::hasAdaptiveVolume() const { return _capabilities.va
 QVariantList DeviceCenterController::pairedDevices() const { return _pairedDevices; }
 
 void DeviceCenterController::setAnc(bool enabled) { _send("anc", {{"enabled",enabled}}); }
-void DeviceCenterController::setAmbient(int level, bool voice) { _send("ambient", {{"level",level},{"focusOnVoice",voice}}); }
+void DeviceCenterController::setAmbient(int level, bool voice) {
+    const int selectedLevel = level >= 1 && level <= 20 ? level : _ambientLevel;
+    _send("ambient", {{"level",selectedLevel},{"focusOnVoice",voice}});
+}
 void DeviceCenterController::setNoiseControlOff() { setAnc(false); }
 void DeviceCenterController::setEqualizerPreset(int preset) { _send("eqPreset", {{"preset",preset}}); }
 void DeviceCenterController::setEqualizerCustom(int bass, const QVariantList& bands) {
     _send("eqCustom", {{"clearBass",bass},{"bands",QJsonArray::fromVariantList(bands)}});
 }
 void DeviceCenterController::setDsee(bool enabled) { _send("dsee", {{"enabled",enabled}}); }
+void DeviceCenterController::setPauseWhenRemoved(bool enabled) { _send("pauseWhenRemoved", {{"enabled",enabled}}); }
 void DeviceCenterController::setSpeakToChat(bool enabled) { _send("speakToChat", {{"enabled",enabled}}); }
 void DeviceCenterController::setAdaptiveVolume(bool enabled) { _send("adaptiveVolume", {{"enabled",enabled}}); }
 void DeviceCenterController::setAutoPowerOff(int index) { _send("autoPowerOff", {{"index",index}}); }

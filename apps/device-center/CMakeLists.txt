@@ -105,6 +105,11 @@ install(TARGETS sony-device-center
     BUNDLE  DESTINATION .)
 
 if(WIN32)
+    enable_language(RC)
+    target_sources(sony-device-center PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../packaging/windows/sony-device-center.rc")
+    target_include_directories(sony-device-center PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../packaging/windows")
     # A console-subsystem binary pops a terminal window next to the GUI on
     # every launch. The app has no console UI, so build it as a GUI-subsystem
     # executable; Qt6::Core supplies the WinMain shim.

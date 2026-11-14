@@ -10,7 +10,6 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
-#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -84,6 +83,7 @@ private:
 
     // Request/Response matching state
     struct PendingRequest {
+        DataType expectedType{DataType::DataMdr};
         uint8_t expectedOpcode{0};
         int expectedSubtype{-1};
         bool hasResponse{false};
@@ -93,7 +93,6 @@ private:
     };
 
     std::optional<PendingRequest> _pendingRequest;
-    std::deque<SonyFrame> _unmatchedFrames;
     bool _hasAck{false};
     uint8_t _expectedAckSeq{0};
 

@@ -941,8 +941,78 @@ ApplicationWindow {
                         }
                     }
 
+                    Card {
+                        objectName: "connectedDevicesCard"
+                        visible: controller.hasConnectedDevices
+                        Layout.fillWidth: true
+                        implicitHeight: connectedHosts.implicitHeight + 32
+
+                        ColumnLayout {
+                            id: connectedHosts
+                            anchors.fill: parent
+                            anchors.margins: 16
+                            spacing: 10
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Eyebrow { text: "Connected devices" }
+                                Item { Layout.fillWidth: true }
+                                Text {
+                                    textFormat: Text.PlainText
+                                    text: controller.connectedDevicesStatus === "valid"
+                                        ? controller.connectedDevices.length + " connected" : ""
+                                    color: window.txtFaint
+                                    font.pixelSize: 11
+                                }
+                            }
+
+                            Repeater {
+                                model: controller.connectedDevices
+                                delegate: RowLayout {
+                                    id: connectedHost
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    spacing: 12
+                                    Rectangle {
+                                        implicitWidth: 6; implicitHeight: 6
+                                        radius: 3
+                                        color: window.success
+                                    }
+                                    Text {
+                                        Layout.fillWidth: true
+                                        textFormat: Text.PlainText
+                                        text: connectedHost.modelData.name || connectedHost.modelData.address
+                                        elide: Text.ElideRight
+                                        color: window.txt
+                                        font.pixelSize: 13
+                                    }
+                                    Text {
+                                        textFormat: Text.PlainText
+                                        text: connectedHost.modelData.playbackDevice ? "Audio source" : "Connected"
+                                        color: connectedHost.modelData.playbackDevice ? window.accentSoft : window.txtDim
+                                        font.pixelSize: 11
+                                    }
+                                }
+                            }
+
+                            Text {
+                                visible: controller.connectedDevices.length === 0
+                                Layout.fillWidth: true
+                                textFormat: Text.PlainText
+                                text: !controller.connected ? "Connect your headphones to see devices."
+                                    : controller.connectedDevicesStatus === "unsupported" ? "Device list unavailable. Check that multipoint is enabled."
+                                    : controller.connectedDevicesStatus === "valid" ? "No connected devices reported."
+                                    : "Device list unavailable. Waiting for the headphones."
+                                wrapMode: Text.WordWrap
+                                color: window.txtDim
+                                font.pixelSize: 12
+                            }
+                        }
+                    }
+
                     // Hero
                     Card {
+                        id: overviewHeroCard
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         radius: 24
@@ -958,7 +1028,7 @@ ApplicationWindow {
                                 id: heroStage
                                 Layout.alignment: Qt.AlignHCenter
                                 Layout.preferredWidth: 290
-                                Layout.preferredHeight: 290
+                                Layout.preferredHeight: Math.min(290, Math.max(80, overviewHeroCard.height - 220))
 
                                 Bloom {
                                     anchors.centerIn: parent
@@ -1436,6 +1506,25 @@ ApplicationWindow {
                                 Layout.fillWidth: true
                                 Eyebrow { text: controller.tenBandEqualizer ? "10-Band" : "5-Band · ±10 dB" }
                                 Item { Layout.fillWidth: true }
+                                Rectangle {
+                                    visible: controller.hasUlt
+                                    implicitWidth: ultStatus.implicitWidth + 24
+                                    implicitHeight: 30
+                                    radius: 15
+                                    color: window.surfaceHi
+                                    border.color: window.lineHi
+                                    Text {
+                                        id: ultStatus
+                                        anchors.centerIn: parent
+                                        textFormat: Text.PlainText
+                                        text: !controller.connected ? "ULT · Disconnected"
+                                            : controller.ultMode < 0 ? "ULT · Unknown"
+                                            : controller.ultMode === 0 ? "ULT Off" : "ULT " + controller.ultMode
+                                        color: controller.connected && controller.ultMode > 0 ? window.accentSoft : window.txtDim
+                                        font.pixelSize: 12
+                                        font.weight: Font.DemiBold
+                                    }
+                                }
                                 Text {
                                     textFormat: Text.PlainText
                                     text: controller.equalizerPresetName
@@ -1600,19 +1689,25 @@ ApplicationWindow {
                             model: [
                                 { key: "dsee",     title: "DSEE Extreme",    desc: "AI restores the highs that compression threw away", glyph: window.icons.sparkle },
                                 { key: "speak",    title: "Speak-to-Chat",   desc: "Pauses playback and opens ambient when you talk",   glyph: window.icons.mic },
-                                { key: "adaptive", title: "Adaptive Volume", desc: "Balances level against your surroundings",          glyph: window.icons.sliders }
+                                { key: "adaptive", title: "Adaptive Volume", desc: "Balances level against your surroundings",          glyph: window.icons.sliders },
+                                { key: "pause", title: "Pause on Removal", desc: "Pause music when you take the headphones off", glyph: window.icons.headphones }
                             ]
 
                             delegate: Card {
                                 id: featCard
                                 required property var modelData
-                                readonly property string featureKey: modelData.key === "speak" ? "speakToChat" : modelData.key === "adaptive" ? "adaptiveVolume" : "dsee"
+                                readonly property string featureKey: modelData.key === "speak" ? "speakToChat"
+                                    : modelData.key === "adaptive" ? "adaptiveVolume"
+                                    : modelData.key === "pause" ? "pauseWhenRemoved" : "dsee"
                                 readonly property var availability: controller.featureStatus[featureKey]
                                 readonly property bool known: controller.connected && availability && availability.availability === "valid"
-                                readonly property bool supported: modelData.key === "dsee" ? controller.hasDsee : modelData.key === "speak" ? controller.hasSpeakToChat : controller.hasAdaptiveVolume
+                                readonly property bool supported: modelData.key === "dsee" ? controller.hasDsee
+                                    : modelData.key === "speak" ? controller.hasSpeakToChat
+                                    : modelData.key === "pause" ? controller.hasPauseWhenRemoved : controller.hasAdaptiveVolume
                                 enabled: supported && controller.connected
                                 readonly property bool on: modelData.key === "dsee" ? controller.dsee
                                                          : modelData.key === "speak" ? controller.speakToChat
+                                                         : modelData.key === "pause" ? controller.pauseWhenRemoved
                                                          : controller.adaptiveVolume
 
                                 Layout.fillWidth: true
@@ -1666,10 +1761,12 @@ ApplicationWindow {
                                     }
 
                                     NeoSwitch {
+                                        enabled: !controller.busy
                                         confirmedChecked: featCard.on
                                         onToggled: {
                                             if (featCard.modelData.key === "dsee") controller.setDsee(checked)
                                             else if (featCard.modelData.key === "speak") controller.setSpeakToChat(checked)
+                                            else if (featCard.modelData.key === "pause") controller.setPauseWhenRemoved(checked)
                                             else controller.setAdaptiveVolume(checked)
                                         }
                                     }
