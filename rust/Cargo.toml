@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["sony-protocol"]
+members = ["sony-protocol", "sony-transport", "sony-widget"]
 
 [workspace.package]
 edition = "2021"

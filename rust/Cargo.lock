@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "libc"
+version = "0.2.191"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -25,6 +31,22 @@ name = "sony-protocol"
 version = "0.1.0"
 dependencies = [
  "thiserror",
+]
+
+[[package]]
+name = "sony-transport"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "sony-protocol",
+]
+
+[[package]]
+name = "sony-widget"
+version = "0.1.0"
+dependencies = [
+ "sony-protocol",
+ "sony-transport",
 ]
 
 [[package]]
