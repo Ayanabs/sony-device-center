@@ -1,11 +1,17 @@
-//! Headphone widget daemon for bars (Waybar / Quickshell).
+//! Headphone widget for bars and desktop widgets (Waybar / Quickshell).
 //!
-//!   sony-widget [run]                     stream one JSON line per state change on stdout
+//! One background **daemon** owns the headset connection; any number of front-ends
+//! **watch** it. Front-ends never talk to the headset themselves, so a bar icon and
+//! a desktop card can run side by side.
+//!
+//!   sony-widget [watch]                   stream one JSON line per state change on stdout
+//!                                         (starts the daemon if it is not running)
+//!   sony-widget daemon                    run the daemon in the foreground
 //!   sony-widget status                    print the current JSON line once
-//!   sony-widget quit                      stop the running instance
+//!   sony-widget quit                      stop the daemon
 //!   sony-widget cycle-nc                  noise cancelling -> ambient -> off -> ...
 //!   sony-widget set-nc off|nc|ambient
-//!   sony-widget set-ambient LEVEL [voice] ambient level 1..20, optional voice focus (0|1)
+//!   sony-widget set-ambient LEVEL [voice] ambient level 1..20, optional voice focus (on|off)
 //!   sony-widget set-eq PRESET             preset id (0x16) or name (bass-boost)
 //!   sony-widget set-pause on|off          pause when removed (if supported)
 //!   sony-widget set-dsee on|off           DSEE (if supported)
@@ -17,7 +23,9 @@ use sony_app::{Backend, Command, Emit, Request, Snapshot, TransportFactory, Upda
 use sony_protocol::presets::PRESETS;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
+use std::process::{Command as Proc, Stdio};
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread;
@@ -26,6 +34,8 @@ use std::time::Duration;
 enum Event {
     Update(Update),
     Command(String, Sender<String>),
+    /// A front-end asked to watch: it gets the current line now and every change after.
+    Subscribe(UnixStream),
 }
 
 fn socket_path() -> PathBuf {
@@ -61,6 +71,10 @@ fn serve(tx: Sender<Event>) {
             thread::spawn(move || {
                 let mut line = String::new();
                 if BufReader::new(&conn).read_line(&mut line).is_ok() {
+                    if line.trim() == "watch" {
+                        let _ = tx.send(Event::Subscribe(conn));
+                        return;
+                    }
                     let (rtx, rrx) = mpsc::channel();
                     if tx.send(Event::Command(line.trim().to_owned(), rtx)).is_ok() {
                         let reply = rrx
@@ -136,50 +150,57 @@ fn parse_command(cmd: &str, s: &Snapshot) -> Result<Command, String> {
     }
 }
 
-/// Only one instance may hold the headset. If another is already running, ask it
-/// to quit and wait for its socket to go away, so the newest instance (and the
-/// front-end reading its output) always wins instead of piling up duplicates.
-fn take_over() {
-    let Ok(mut s) = UnixStream::connect(socket_path()) else { return };
-    let _ = writeln!(s, "quit");
-    let _ = BufReader::new(s).read_line(&mut String::new());
-    for _ in 0..30 {
-        if UnixStream::connect(socket_path()).is_err() {
+/// Starts the daemon in its own session (so a shell reload never takes it down) and
+/// waits until its socket answers.
+fn ensure_daemon() {
+    if UnixStream::connect(socket_path()).is_ok() {
+        return;
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        let mut cmd = Proc::new(exe);
+        cmd.arg("daemon").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        // SAFETY: setsid is async-signal-safe and runs in the child before exec.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        let _ = cmd.spawn();
+    }
+    for _ in 0..50 {
+        if UnixStream::connect(socket_path()).is_ok() {
             return;
         }
         thread::sleep(Duration::from_millis(100));
     }
 }
 
-/// Last resort for an orphan that lost its socket (e.g. its front-end was killed and
-/// a newer instance unlinked the path): ask the OS to stop every other sony-widget.
-fn kill_others() {
-    let me = std::process::id();
-    let others: Vec<u32> = std::fs::read_dir("/proc")
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
-        .filter(|&pid| pid != me)
-        .filter(|pid| {
-            std::fs::read_to_string(format!("/proc/{pid}/comm")).is_ok_and(|c| c.trim() == "sony-widget")
-        })
-        .collect();
-    for pid in &others {
-        // SAFETY: plain signal to another process of the same user.
-        unsafe { libc::kill(*pid as libc::pid_t, libc::SIGTERM) };
-    }
-    for _ in 0..30 {
-        if others.iter().all(|pid| !std::path::Path::new(&format!("/proc/{pid}")).exists()) {
-            return;
+/// Front-end mode: print the daemon's lines until stdout closes. Reattaches (and
+/// restarts the daemon) if the daemon goes away.
+fn watch() {
+    let mut out = std::io::stdout();
+    loop {
+        ensure_daemon();
+        if let Ok(mut s) = UnixStream::connect(socket_path()) {
+            if writeln!(s, "watch").is_ok() {
+                for line in BufReader::new(s).lines() {
+                    let Ok(line) = line else { break };
+                    if writeln!(out, "{line}").and_then(|_| out.flush()).is_err() {
+                        return; // the front-end closed our stdout: we are done
+                    }
+                }
+            }
         }
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_secs(1));
     }
 }
 
-fn run() {
-    take_over();
-    kill_others();
+fn daemon() {
+    // Single instance: if a daemon already answers, there is nothing to do.
+    if UnixStream::connect(socket_path()).is_ok() {
+        return;
+    }
     let (tx, rx) = mpsc::channel::<Event>();
     serve(tx.clone());
 
@@ -195,15 +216,16 @@ fn run() {
     let mut snap = Snapshot::disconnected("searching");
     let mut error = String::new();
     let mut last = String::new();
-    let emit_line = |snap: &Snapshot, error: &str, last: &mut String| {
+    let mut subscribers: Vec<UnixStream> = Vec::new();
+    let emit_line = |snap: &Snapshot, error: &str, last: &mut String, subs: &mut Vec<UnixStream>| {
         let line = render(snap, error);
         if line != *last {
-            println!("{line}");
-            let _ = std::io::stdout().flush();
+            // A watcher that is gone or stuck is dropped instead of blocking the daemon.
+            subs.retain_mut(|s| writeln!(s, "{line}").is_ok());
             *last = line;
         }
     };
-    emit_line(&snap, &error, &mut last);
+    emit_line(&snap, &error, &mut last, &mut subscribers);
 
     while let Ok(ev) = rx.recv() {
         match ev {
@@ -215,6 +237,13 @@ fn run() {
             }
             Event::Update(Update::Error(e)) => error = e,
             Event::Update(_) => continue,
+            Event::Subscribe(mut conn) => {
+                let _ = conn.set_write_timeout(Some(Duration::from_millis(250)));
+                if writeln!(conn, "{}", render(&snap, &error)).is_ok() {
+                    subscribers.push(conn);
+                }
+                continue;
+            }
             Event::Command(cmd, reply) => {
                 if cmd == "quit" {
                     let _ = reply.send("ok".into());
@@ -241,7 +270,7 @@ fn run() {
                 let _ = reply.send(r);
             }
         }
-        emit_line(&snap, &error, &mut last);
+        emit_line(&snap, &error, &mut last, &mut subscribers);
     }
 }
 
@@ -251,10 +280,11 @@ fn main() {
         Some("quit" | "status" | "cycle-nc" | "set-nc" | "set-ambient" | "set-eq" | "set-pause" | "set-dsee") => {
             std::process::exit(client(&args))
         }
+        Some("daemon") => daemon(),
         Some("-h" | "--help") => {
-            println!("usage: sony-widget [run] | status | cycle-nc | set-nc off|nc|ambient | set-ambient LEVEL [on|off] | set-eq PRESET | set-pause on|off | set-dsee on|off");
+            println!("usage: sony-widget [watch] | daemon | status | quit | cycle-nc | set-nc off|nc|ambient | set-ambient LEVEL [on|off] | set-eq PRESET | set-pause on|off | set-dsee on|off");
         }
-        _ => run(),
+        _ => watch(),
     }
 }
 

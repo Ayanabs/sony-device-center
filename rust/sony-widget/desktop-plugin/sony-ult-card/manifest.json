@@ -1,0 +1,8 @@
+{
+  "id": "sony-ult-card",
+  "name": "Sony headphones card",
+  "description": "Desktop card for Sony WH/WF/ULT headphones: battery, noise control, ULT mode (via sony-widget).",
+  "version": "0.1.0",
+  "hosts": ["desktopWidget"],
+  "defaults": { "desktopWidget": { "bg": "glass" } }
+}

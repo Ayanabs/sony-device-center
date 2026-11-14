@@ -73,3 +73,24 @@ RYOSTORE_PLUGINS_DIR=~/.local/share/ryoku-dev-plugins ryoku-plugins-place sony-u
 Left-click opens a panel (noise control with ambient level and voice focus, equalizer
 presets, pause on removal, DSEE, connected devices); right-click cycles noise control.
 Place it left of the music widget with `ryoku-shell bar move sony-ult --section right --index 0` (index 1 puts it right of it).
+
+## Desktop card (Ryoku `desktopWidget` plugin)
+
+`desktop-plugin/sony-ult-card` is a card in the style of the shell's music card: cover tile,
+title, dotted + wavy battery indicators and NC / AMB / OFF buttons. Install it like the bar
+plugin, then place it:
+
+```sh
+cp -r desktop-plugin/sony-ult-card ~/.local/share/ryoku-dev-plugins/
+export RYOSTORE_PLUGINS_DIR=~/.local/share/ryoku-dev-plugins
+ryoku-plugins-place sony-ult-card desktopWidget 80 480 0.85 false   # x y scale locked
+ryoku-plugins-place sony-ult-card enabled true
+```
+
+Drag it to move it; Ctrl+wheel resizes it.
+
+## How the pieces fit
+
+`sony-widget` runs as one background **daemon** that owns the headset connection. The bar icon,
+the desktop card and Waybar each run `sony-widget` (watch mode), which starts the daemon if needed
+and prints its updates. Stop the daemon with `sony-widget quit`.
